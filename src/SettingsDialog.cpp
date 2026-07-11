@@ -31,6 +31,9 @@
 #include <QLineEdit>
 #include <QPixmap>
 #include <QIcon>
+#include <QPainter>
+#include <QLinearGradient>
+#include <iterator>
 
 namespace {
 // Every color the "Theme color" combo (see the Appearance tab) treats as
@@ -60,6 +63,21 @@ QString themedColorBackupKey(const QString &settingsKey)
     }
     return QString();
 }
+
+// "Rainbow" is the one theme choice that isn't a single color applied
+// everywhere — each of kThemedColorKeys gets its own distinct hue instead
+// (a spread across the visible spectrum), parallel array indexed exactly
+// like kThemedColorKeys: [accent, cpu, ram, gpu, vram, mic]. Kept as its
+// own array (rather than folded into ThemedColorKey) since every *other*
+// theme choice only ever needs one color, not six.
+const char *kRainbowColors[] = {
+    "#8b5cf6", // accent — violet
+    "#e5484d", // cpu — red
+    "#f2994a", // ram — orange
+    "#e8b93b", // gpu — gold (a pure yellow reads poorly against light surfaces)
+    "#2fa968", // vram — green
+    "#3b82f6", // mic — blue
+};
 }
 
 SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
@@ -167,6 +185,21 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         QPixmap swatch(16, 16);
         swatch.fill(QColor(preset.hex));
         m_themeColorCombo->addItem(QIcon(swatch), preset.name, QString(preset.hex));
+    }
+    {
+        // A gradient swatch across all six kRainbowColors, rather than a
+        // solid fill like the presets above — visually signals up front
+        // that this one behaves differently (colors *everything*
+        // differently, not everything the same).
+        QPixmap rainbowSwatch(16, 16);
+        QPainter painter(&rainbowSwatch);
+        QLinearGradient gradient(0, 0, 16, 0);
+        const int stops = static_cast<int>(std::size(kRainbowColors));
+        for (int i = 0; i < stops; ++i)
+            gradient.setColorAt(double(i) / (stops - 1), QColor(kRainbowColors[i]));
+        painter.fillRect(rainbowSwatch.rect(), gradient);
+        painter.end();
+        m_themeColorCombo->addItem(QIcon(rainbowSwatch), "Rainbow", QStringLiteral("__rainbow__"));
     }
     m_themeColorCombo->addItem(QStringLiteral("Custom…"), QStringLiteral("__custom__"));
     connect(m_themeColorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -553,6 +586,19 @@ void SettingsDialog::onThemeColorPresetChanged(int index)
 {
     const QString data = m_themeColorCombo->itemData(index).toString();
 
+    if (data == QLatin1String("__rainbow__")) {
+        // Unlike every other choice here, this sets each of the six colors
+        // to its own distinct value rather than one color applied
+        // everywhere — see kRainbowColors' own comment. Each swatch's
+        // individual backup (see makeColorPickerRow()) is untouched, same
+        // as picking any other theme color, so "Custom…" afterward still
+        // restores whatever was manually set before this.
+        for (int i = 0; i < kThemedColorKeys.size(); ++i)
+            QSettings().setValue(kThemedColorKeys[i].live, QString(kRainbowColors[i]));
+        notifyColorChanged("appearance/accentColor");
+        return;
+    }
+
     if (data == QLatin1String("__custom__")) {
         // Restores whatever was last manually picked for each swatch this
         // combo governs (accent + every stats meter — see makeColorPickerRow()
@@ -612,29 +658,49 @@ void SettingsDialog::onThemeColorPresetChanged(int index)
 void SettingsDialog::refreshThemeColorCombo()
 {
     QSettings settings;
-    const QString accent = settings.value("appearance/accentColor").toString().toLower();
 
-    // A "clean" preset/Default state means every *other* themed color is
-    // unset (tracking the accent automatically) — if even one stats meter
-    // has its own override, this is a custom palette regardless of what
-    // the accent itself happens to be set to.
-    bool othersUnset = true;
-    for (int i = 1; i < kThemedColorKeys.size(); ++i) {
-        if (!settings.value(kThemedColorKeys[i].live).toString().isEmpty()) {
-            othersUnset = false;
+    // Rainbow assigns a different color to each of the six slots, so it
+    // needs its own exact-match check first — the "clean preset" logic
+    // below assumes a single shared color, which doesn't apply to it.
+    bool isRainbow = true;
+    for (int i = 0; i < kThemedColorKeys.size(); ++i) {
+        if (settings.value(kThemedColorKeys[i].live).toString().toLower()
+                != QString::fromLatin1(kRainbowColors[i])) { // kRainbowColors entries are already lowercase
+            isRainbow = false;
             break;
         }
     }
 
     int matchIndex = m_themeColorCombo->count() - 1; // falls back to "Custom…", the last entry
-    if (othersUnset) {
-        if (accent.isEmpty()) {
-            matchIndex = 0; // "Default"
-        } else {
-            for (int i = 1; i < m_themeColorCombo->count() - 1; ++i) {
-                if (m_themeColorCombo->itemData(i).toString().toLower() == accent) {
-                    matchIndex = i;
-                    break;
+
+    if (isRainbow) {
+        const int rainbowIndex = m_themeColorCombo->findData(QStringLiteral("__rainbow__"));
+        if (rainbowIndex >= 0)
+            matchIndex = rainbowIndex;
+    } else {
+        const QString accent = settings.value("appearance/accentColor").toString().toLower();
+
+        // A "clean" preset/Default state means every *other* themed color
+        // is unset (tracking the accent automatically) — if even one stats
+        // meter has its own override, this is a custom palette regardless
+        // of what the accent itself happens to be set to.
+        bool othersUnset = true;
+        for (int i = 1; i < kThemedColorKeys.size(); ++i) {
+            if (!settings.value(kThemedColorKeys[i].live).toString().isEmpty()) {
+                othersUnset = false;
+                break;
+            }
+        }
+
+        if (othersUnset) {
+            if (accent.isEmpty()) {
+                matchIndex = 0; // "Default"
+            } else {
+                for (int i = 1; i < m_themeColorCombo->count() - 1; ++i) {
+                    if (m_themeColorCombo->itemData(i).toString().toLower() == accent) {
+                        matchIndex = i;
+                        break;
+                    }
                 }
             }
         }
