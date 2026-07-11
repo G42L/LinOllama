@@ -1393,8 +1393,16 @@ void ChatWidget::reloadThemedIcons()
         ":/icons/web-search.svg", dark, 16, m_webSearchEnabled ? "accent" : "secondaryText"));
     m_thinkingAction->setIcon(Theme::loadThemedIcon(
         ":/icons/thinking.svg", dark, 16, m_thinkingEnabled ? "accent" : "secondaryText"));
+    // The button's own "recording" property (set synchronously in
+    // onVoicePressed()/onVoiceReleased()), not m_voiceRecorder.isRecording()
+    // — QMediaRecorder::stop() is asynchronous, so isRecording() briefly
+    // still reads true right after onVoiceReleased() calls stopRecording(),
+    // which painted the icon red one extra time with nothing left to ever
+    // correct it afterward (nothing was connected to the recorder's own
+    // state-changed signal to refresh it again once it actually stopped).
+    const bool recordingUi = m_voiceButton->property("recording").toBool();
     m_voiceButton->setIcon(Theme::loadThemedIcon(
-        ":/icons/microphone.svg", dark, 16, m_voiceRecorder.isRecording() ? "danger" : "secondaryText"));
+        ":/icons/microphone.svg", dark, 16, recordingUi ? "danger" : "secondaryText"));
 
     reloadSendButtonIcon(); // also theme-dependent, though driven by m_sendButtonStyle rather than a toggle
 }
