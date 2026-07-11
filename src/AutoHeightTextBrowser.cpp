@@ -49,11 +49,19 @@ QString wrapRawSvgAsImages(const QString &html)
 // wrapRawSvgAsImages()). Returns false (leaving htmlOut untouched) when
 // there's no such block, so the caller can fall back to plain Markdown
 // rendering.
-bool extractHtmlBlocks(const QString &content, QString *htmlOut)
+// Shared with AutoHeightTextBrowser::containsHtmlBlock() below — keep the
+// two in sync if this pattern ever changes.
+const QRegularExpression &htmlFencePattern()
 {
     static const QRegularExpression htmlFence(
         QStringLiteral("```html\\s*\\n(.*?)```"),
         QRegularExpression::DotMatchesEverythingOption);
+    return htmlFence;
+}
+
+bool extractHtmlBlocks(const QString &content, QString *htmlOut)
+{
+    const QRegularExpression &htmlFence = htmlFencePattern();
 
     if (!content.contains(htmlFence))
         return false;
@@ -119,6 +127,11 @@ void AutoHeightTextBrowser::setMarkdownWithHtmlBlocks(const QString &content)
         setHtml(html);
     else
         setMarkdown(content);
+}
+
+bool AutoHeightTextBrowser::containsHtmlBlock(const QString &content)
+{
+    return content.contains(htmlFencePattern());
 }
 
 QVariant AutoHeightTextBrowser::loadResource(int type, const QUrl &name)

@@ -474,6 +474,26 @@ QSlider#meterSmoothingSlider::handle:horizontal {
     background-color: {{menuButtonHoverBg}};
 }
 
+/* ChatWidget::renderAssistantContent()'s raw/rendered toggle for replies
+   containing a ```html block. */
+#htmlRawToggleButton {
+    background-color: transparent;
+    color: {{secondaryText}};
+    font-size: 11px;
+    border: none;
+    border-radius: 6px;
+    padding: 2px 8px;
+}
+
+#htmlRawToggleButton:hover {
+    background-color: {{menuButtonHoverBg}};
+    color: {{text}};
+}
+
+#htmlRawToggleButton:checked {
+    color: {{accent}};
+}
+
 /* Same fill as the user bubble it's replacing the text of, so it reads as
    part of the same prompt rather than a separate surface/card. */
 #messageEditBox {

@@ -764,6 +764,38 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
 
     browser->setMarkdownWithHtmlBlocks(textOnly);
 
+    // A ```html reply is rendered through Qt's rich-text HTML subset, which
+    // silently drops/reinterprets anything outside it (see
+    // AutoHeightTextBrowser's own comments — no JS, inline <svg> gets
+    // rewritten to an <img>, etc.) — this toggle is what lets someone check
+    // what the model actually produced versus what ended up on screen.
+    // Plain-Markdown replies never get one; there'd be nothing to compare.
+    if (AutoHeightTextBrowser::containsHtmlBlock(textOnly)) {
+        auto *toggleRow = new QWidget;
+        auto *toggleLayout = new QHBoxLayout(toggleRow);
+        toggleLayout->setContentsMargins(0, 4, 0, 0);
+        toggleLayout->addStretch(1);
+
+        auto *toggleButton = new QToolButton;
+        toggleButton->setObjectName("htmlRawToggleButton");
+        toggleButton->setText("View source");
+        toggleButton->setCheckable(true);
+        toggleButton->setCursor(Qt::PointingHandCursor);
+        toggleButton->setAutoRaise(true);
+        connect(toggleButton, &QToolButton::toggled, browser, [browser, textOnly, toggleButton](bool showRaw) {
+            if (showRaw) {
+                browser->setPlainText(textOnly);
+                toggleButton->setText("View rendered");
+            } else {
+                browser->setMarkdownWithHtmlBlocks(textOnly);
+                toggleButton->setText("View source");
+            }
+        });
+        toggleLayout->addWidget(toggleButton);
+
+        bubbleLayout->addWidget(toggleRow);
+    }
+
     for (const MapBlockSpec &spec : mapBlocks)
         bubbleLayout->addWidget(new MapEmbedWidget(spec.query, spec.zoom));
 }

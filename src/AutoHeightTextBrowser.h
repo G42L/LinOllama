@@ -37,6 +37,11 @@ public:
     // for those). It can render structure and styling, not run a web app.
     void setMarkdownWithHtmlBlocks(const QString &content);
 
+    // True if `content` contains at least one ```html fenced block — used
+    // by ChatWidget to decide whether a reply needs the raw/rendered toggle
+    // button at all (plain Markdown replies never get one).
+    static bool containsHtmlBlock(const QString &content);
+
 protected:
     void resizeEvent(QResizeEvent *event) override;
     // Qt only resolves local/embedded resources (data URIs, qrc, disk
