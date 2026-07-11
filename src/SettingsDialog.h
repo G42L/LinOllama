@@ -90,6 +90,7 @@ signals:
 
 private slots:
     void onThemeComboChanged(int index);
+    void onThemeColorPresetChanged(int index);
     void onSendButtonStyleComboChanged(int index);
     void onSendButtonFilledToggled(bool filled);
     void onContextLengthEnabledToggled(bool enabled);
@@ -179,11 +180,23 @@ private:
     // the one that changed, refreshing every swatch, and telling
     // StatsStripWidget to re-derive its meter colors.
     void notifyColorChanged(const QString &changedKey);
+    // Re-selects m_themeColorCombo's current item to match whatever
+    // "appearance/accentColor" actually holds right now — "Default" if
+    // unset, the matching preset if it happens to equal one exactly, else
+    // "Custom…" (e.g. after picking an arbitrary color via the Application
+    // swatch below the combo). Called at construction and from
+    // notifyColorChanged() whenever the accent color changes some other
+    // way, so the combo never drifts out of sync with the swatch.
+    void refreshThemeColorCombo();
 
     ThemeManager *m_themeManager = nullptr;
     OllamaClient *m_ollamaClient = nullptr;
 
     QComboBox *m_themeCombo = nullptr;
+    // "Theme color": Default / one of 8 curated presets / Custom — a quick
+    // way to set "appearance/accentColor" without opening the color picker,
+    // kept in sync with the swatch below it (see refreshThemeColorCombo()).
+    QComboBox *m_themeColorCombo = nullptr;
     QComboBox *m_sendButtonStyleCombo = nullptr;
     QCheckBox *m_sendButtonFilledCheck = nullptr; // "Filled send button" — see sendButtonFilledChanged()
     QVector<QPair<QPushButton *, QString>> m_colorSwatchButtons; // (swatch button, settingsKey) — see makeColorPickerRow()

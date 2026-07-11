@@ -29,6 +29,38 @@
 #include <QSignalBlocker>
 #include <QTabWidget>
 #include <QLineEdit>
+#include <QPixmap>
+#include <QIcon>
+
+namespace {
+// Every color the "Theme color" combo (see the Appearance tab) treats as
+// part of one coordinated palette — the Application accent plus all five
+// stats meters. `backup` is where makeColorPickerRow() remembers a manual
+// pick for that swatch, independent of `live` (which a preset/Default
+// choice from the combo can freely overwrite) — see onThemeColorPresetChanged()
+// and refreshThemeColorCombo(). Index 0 (accent) is treated as special in a
+// couple of places below, so keep it first if this list is ever reordered.
+struct ThemedColorKey { const char *live; const char *backup; };
+const QVector<ThemedColorKey> kThemedColorKeys = {
+    {"appearance/accentColor", "appearance/customAccentColor"},
+    {"stats/cpuColor",         "appearance/customCpuColor"},
+    {"stats/ramColor",         "appearance/customRamColor"},
+    {"stats/gpuColor",         "appearance/customGpuColor"},
+    {"stats/vramColor",        "appearance/customVramColor"},
+    {"stats/micColor",         "appearance/customMicColor"},
+};
+
+// Empty when settingsKey isn't one of kThemedColorKeys at all (e.g. some
+// future unrelated color picker reusing makeColorPickerRow()).
+QString themedColorBackupKey(const QString &settingsKey)
+{
+    for (const ThemedColorKey &k : kThemedColorKeys) {
+        if (settingsKey == QLatin1String(k.live))
+            return QString(QLatin1String(k.backup));
+    }
+    return QString();
+}
+}
 
 SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
                                 WhisperManager *whisperManager, QWidget *parent)
@@ -109,11 +141,46 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     colorsHeading->setStyleSheet("font-weight: 600; margin-top: 6px;");
     appearanceLayout->addRow(colorsHeading);
 
+    // Quick-pick presets for "appearance/accentColor" — curated for
+    // contrast/vibrancy against both themes' neutral surfaces rather than
+    // pulled from any particular brand palette. Each gets a small color
+    // swatch icon in the combo itself so picking one is a visual choice,
+    // not a guess from a name. "Default" clears the override (tracks
+    // the active theme's own built-in accent); "Custom…" changes nothing
+    // by itself — it's what the combo shows once you've picked an exact
+    // color via the swatch below that doesn't happen to match a preset.
+    struct ThemeColorPreset { const char *name; const char *hex; };
+    static const ThemeColorPreset kThemeColorPresets[] = {
+        {"Coral",   "#e8674a"},
+        {"Amber",   "#e8a23b"},
+        {"Emerald", "#21a366"},
+        {"Teal",    "#14b8a6"},
+        {"Sky",     "#3b9de8"},
+        {"Indigo",  "#5b6ee8"},
+        {"Violet",  "#8b5cf6"},
+        {"Rose",    "#e0457b"},
+    };
+
+    m_themeColorCombo = new QComboBox;
+    m_themeColorCombo->addItem("Default", QString());
+    for (const ThemeColorPreset &preset : kThemeColorPresets) {
+        QPixmap swatch(16, 16);
+        swatch.fill(QColor(preset.hex));
+        m_themeColorCombo->addItem(QIcon(swatch), preset.name, QString(preset.hex));
+    }
+    m_themeColorCombo->addItem(QStringLiteral("Custom…"), QStringLiteral("__custom__"));
+    connect(m_themeColorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::onThemeColorPresetChanged);
+    appearanceLayout->addRow("Theme color", m_themeColorCombo);
+
     // "Application" drives the whole app's accent (focus borders, the
     // send/stop button, progress-bar fills, etc. — see Theme::styleSheet())
     // — not just the stats panel. Each row's own reset button (rather than
     // one shared "reset all") lets any single color be reverted on its own.
+    // Still here alongside the quick-pick combo above for exact/arbitrary
+    // colors the 8 presets don't cover.
     appearanceLayout->addRow("Application", makeColorPickerRow("appearance/accentColor"));
+    refreshThemeColorCombo(); // matches the combo to whatever's actually stored, now that both it and the swatch above exist
 
     // The four stats-meter colors share one row (a borderless, headerless
     // 4-column strip — own small label above each swatch — rather than one
@@ -482,6 +549,101 @@ void SettingsDialog::onThemeComboChanged(int index)
     m_themeManager->setMode(mode);
 }
 
+void SettingsDialog::onThemeColorPresetChanged(int index)
+{
+    const QString data = m_themeColorCombo->itemData(index).toString();
+
+    if (data == QLatin1String("__custom__")) {
+        // Restores whatever was last manually picked for each swatch this
+        // combo governs (accent + every stats meter — see makeColorPickerRow()
+        // and kThemedColorKeys), not just the accent. Any swatch with no
+        // backup yet just gets cleared instead, tracking the accent like
+        // it would by default. First time ever (nothing backed up at all),
+        // there's nothing to restore, so this opens the picker for the
+        // Application color directly instead of silently doing nothing —
+        // the rest fall back to tracking it automatically either way.
+        bool anyBackup = false;
+        for (const ThemedColorKey &k : kThemedColorKeys) {
+            if (!QSettings().value(k.backup).toString().isEmpty()) {
+                anyBackup = true;
+                break;
+            }
+        }
+
+        if (!anyBackup) {
+            const QColor picked = QColorDialog::getColor(
+                QColor(currentColorHex("appearance/accentColor")), this, "Choose Color");
+            if (!picked.isValid()) {
+                refreshThemeColorCombo(); // the combo already flipped to "Custom…"; undo that since nothing was actually picked
+                return;
+            }
+            QSettings().setValue("appearance/accentColor", picked.name());
+            QSettings().setValue("appearance/customAccentColor", picked.name());
+        } else {
+            for (const ThemedColorKey &k : kThemedColorKeys) {
+                const QString backup = QSettings().value(k.backup).toString();
+                if (!backup.isEmpty())
+                    QSettings().setValue(k.live, backup);
+                else
+                    QSettings().remove(k.live);
+            }
+        }
+        notifyColorChanged("appearance/accentColor");
+        return;
+    }
+
+    if (data.isEmpty())
+        QSettings().remove("appearance/accentColor");
+    else
+        QSettings().setValue("appearance/accentColor", data);
+
+    // Any individually-customized stats-meter color is cleared here too —
+    // without this, a meter customized earlier would keep showing its old
+    // color instead of picking up this theme choice, when the whole point
+    // is that any theme color applies everywhere at once. Each one's own
+    // saved backup (see makeColorPickerRow()) is untouched, so selecting
+    // "Custom…" afterward still restores it.
+    for (int i = 1; i < kThemedColorKeys.size(); ++i) // starts at 1: index 0 is the accent itself, handled above
+        QSettings().remove(kThemedColorKeys[i].live);
+
+    notifyColorChanged("appearance/accentColor");
+}
+
+void SettingsDialog::refreshThemeColorCombo()
+{
+    QSettings settings;
+    const QString accent = settings.value("appearance/accentColor").toString().toLower();
+
+    // A "clean" preset/Default state means every *other* themed color is
+    // unset (tracking the accent automatically) — if even one stats meter
+    // has its own override, this is a custom palette regardless of what
+    // the accent itself happens to be set to.
+    bool othersUnset = true;
+    for (int i = 1; i < kThemedColorKeys.size(); ++i) {
+        if (!settings.value(kThemedColorKeys[i].live).toString().isEmpty()) {
+            othersUnset = false;
+            break;
+        }
+    }
+
+    int matchIndex = m_themeColorCombo->count() - 1; // falls back to "Custom…", the last entry
+    if (othersUnset) {
+        if (accent.isEmpty()) {
+            matchIndex = 0; // "Default"
+        } else {
+            for (int i = 1; i < m_themeColorCombo->count() - 1; ++i) {
+                if (m_themeColorCombo->itemData(i).toString().toLower() == accent) {
+                    matchIndex = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    const QSignalBlocker blocker(m_themeColorCombo);
+    m_themeColorCombo->setCurrentIndex(matchIndex);
+}
+
 void SettingsDialog::onSendButtonStyleComboChanged(int index)
 {
     const QString style = m_sendButtonStyleCombo->itemData(index).toString();
@@ -552,6 +714,12 @@ void SettingsDialog::notifyColorChanged(const QString &changedKey)
     if (changedKey == QLatin1String("appearance/accentColor"))
         m_themeManager->notifyAppearanceChanged();
 
+    // A change to *any* of the six colors the "Theme color" combo governs
+    // (not just the accent) can flip it to/from "Custom…" — e.g. manually
+    // editing just the GPU meter's color while a preset is otherwise active.
+    if (!themedColorBackupKey(changedKey).isEmpty())
+        refreshThemeColorCombo();
+
     // Any swatch still on "default" visually tracks whichever color just
     // changed (the effective accent), so all of them need refreshing, not
     // just the one that was actually edited.
@@ -588,6 +756,14 @@ QWidget *SettingsDialog::makeColorPickerRow(const QString &settingsKey)
         if (!picked.isValid())
             return;
         QSettings().setValue(settingsKey, picked.name());
+        // Remembered separately from the active color itself, so picking a
+        // theme color afterward (see onThemeColorPresetChanged()) doesn't
+        // lose it — selecting "Custom…" again later restores exactly this,
+        // for every swatch this backs (accent + every stats meter), not
+        // just the one just edited.
+        const QString backupKey = themedColorBackupKey(settingsKey);
+        if (!backupKey.isEmpty())
+            QSettings().setValue(backupKey, picked.name());
         notifyColorChanged(settingsKey);
     });
     connect(resetButton, &QPushButton::clicked, this, [this, settingsKey]() {
