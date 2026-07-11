@@ -116,6 +116,13 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   running server — a systemd **user** service, a systemd **system** service
   (via `pkexec` for a proper native auth prompt, not `sudo`), or a plain
   `ollama serve` process it manages directly — rather than assuming one.
+- **Server environment overrides** (Settings → Ollama): `OLLAMA_MODELS`,
+  `OLLAMA_KEEP_ALIVE`, `OLLAMA_FLASH_ATTENTION`, `OLLAMA_NUM_PARALLEL` —
+  applied the next time Start is used. For a systemd **user** service, a
+  drop-in override (`~/.config/systemd/user/ollama.service.d/override.conf`)
+  is written and reloaded automatically; for a plain process this app
+  starts, they're just set directly in its environment. A systemd
+  **system** service isn't modified (see Limitations).
 
 ### System monitoring
 
@@ -201,7 +208,11 @@ install yet — see Limitations.
 - **Settings**: `~/.config/ollama-tray/ollama-tray.conf` (theme, accent/meter
   colors, send button style, context-length override, model-optimization
   toggle, Whisper binary/models-folder/selected-model paths, microphone
-  device). Delete this file to reset everything to defaults.
+  device, Ollama server environment overrides). Delete this file to reset
+  everything to defaults.
+- **Systemd user drop-in** (only written if a systemd *user* `ollama.service`
+  unit exists and at least one server environment override is set):
+  `~/.config/systemd/user/ollama.service.d/override.conf`.
 - Nothing is sent anywhere except your configured Ollama server, your
   selected microphone → the local whisper.cpp process (never leaves the
   machine), and — only when you explicitly enable the web search tool for a
@@ -221,10 +232,13 @@ install yet — see Limitations.
 - **No remote/non-default Ollama host setting.** The client can technically
   point at a different base URL, but there's no Settings UI to configure it
   yet — it's hardcoded to `http://127.0.0.1:11434`.
-- **No server-level configuration UI.** Things like `OLLAMA_MODELS`,
-  `OLLAMA_KEEP_ALIVE`, `OLLAMA_FLASH_ATTENTION`, or `OLLAMA_NUM_PARALLEL`
-  aren't exposed — you'd need to set those in Ollama's own service
-  environment yourself.
+- **Server environment settings (Settings → Ollama) only take effect via a
+  systemd *user* service or a plain process this app starts directly.** A
+  systemd *system* service isn't touched automatically (would need `pkexec`
+  to write a root-owned unit file) — set `OLLAMA_MODELS`, `OLLAMA_KEEP_ALIVE`,
+  `OLLAMA_FLASH_ATTENTION`, and `OLLAMA_NUM_PARALLEL` in its own unit file
+  instead. Also: these only apply the next time Ollama is *(re)started* via
+  the tray's Start/Stop, not to a server that's already running.
 - **No model pull/delete UI.** You manage which models exist via the
   `ollama` CLI directly; this app only lets you pick among models Ollama
   already reports.

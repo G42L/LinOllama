@@ -1,7 +1,12 @@
 #include "ServerController.h"
 
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QDebug>
+#include <QSettings>
+#include <QDir>
+#include <QFile>
+#include <QTextStream>
 #include <csignal>
 
 ServerController::ServerController(QObject *parent) : QObject(parent) {}
@@ -67,6 +72,65 @@ QList<qint64> ServerController::findLooseServerPids()
     return pids;
 }
 
+QMap<QString, QString> ServerController::configuredEnvironmentOverrides() const
+{
+    QSettings settings;
+    QMap<QString, QString> env;
+
+    const QString modelsPath = settings.value("ollamaServer/modelsPath").toString().trimmed();
+    if (!modelsPath.isEmpty())
+        env.insert("OLLAMA_MODELS", modelsPath);
+
+    const QString keepAlive = settings.value("ollamaServer/keepAlive").toString().trimmed();
+    if (!keepAlive.isEmpty())
+        env.insert("OLLAMA_KEEP_ALIVE", keepAlive);
+
+    if (settings.value("ollamaServer/flashAttention", false).toBool())
+        env.insert("OLLAMA_FLASH_ATTENTION", "1");
+
+    // 0 is the Settings spin box's "Auto (default)" special value — omit
+    // the variable entirely rather than sending OLLAMA_NUM_PARALLEL=0,
+    // which would mean something different (Ollama wouldn't parse that as
+    // "unset").
+    const int numParallel = settings.value("ollamaServer/numParallel", 0).toInt();
+    if (numParallel > 0)
+        env.insert("OLLAMA_NUM_PARALLEL", QString::number(numParallel));
+
+    return env;
+}
+
+void ServerController::applyUserSystemdEnvironmentOverride()
+{
+    if (!isSystemdUnitKnown(/*userScope=*/true))
+        return;
+
+    const QString dropInDir = QDir::homePath() + "/.config/systemd/user/ollama.service.d";
+    const QString overridePath = dropInDir + "/override.conf";
+    const QMap<QString, QString> env = configuredEnvironmentOverrides();
+
+    if (env.isEmpty()) {
+        // Nothing configured (any more) — remove a stale override from an
+        // earlier session instead of leaving it silently in effect.
+        if (QFile::exists(overridePath))
+            QFile::remove(overridePath);
+    } else {
+        QDir().mkpath(dropInDir);
+        QFile file(overridePath);
+        if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            QTextStream out(&file);
+            out << "[Service]\n";
+            for (auto it = env.constBegin(); it != env.constEnd(); ++it)
+                out << "Environment=\"" << it.key() << "=" << it.value() << "\"\n";
+        } else {
+            qWarning() << "ServerController: couldn't write" << overridePath;
+            return;
+        }
+    }
+
+    // Cheap and idempotent — safe to run even when nothing actually changed.
+    runSync("systemctl", {"--user", "daemon-reload"}, nullptr, 5000);
+}
+
 ServerController::RunMode ServerController::detectMode()
 {
     RunMode mode = RunMode::NotRunning;
@@ -93,6 +157,11 @@ void ServerController::start()
         emit actionFailed("Ollama already appears to be running.");
         return;
     }
+
+    // Refreshes (or clears) the systemd user drop-in from whatever's
+    // currently configured in Settings before actually starting anything —
+    // a no-op if no user-scope unit exists, so harmless to call unconditionally.
+    applyUserSystemdEnvironmentOverride();
 
     // Prefer whichever systemd scope already has a unit defined, since that
     // respects however the user (or a package installer) set things up.
@@ -128,6 +197,13 @@ void ServerController::start()
     // terminate() instead of hunting for the PID again.
     m_ownedProcess.setProgram("ollama");
     m_ownedProcess.setArguments({"serve"});
+
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QMap<QString, QString> overrides = configuredEnvironmentOverrides();
+    for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it)
+        env.insert(it.key(), it.value());
+    m_ownedProcess.setProcessEnvironment(env);
+
     m_ownedProcess.start();
     if (!m_ownedProcess.waitForStarted(3000)) {
         emit actionFailed("Couldn't start `ollama serve` — is Ollama installed and on PATH?");

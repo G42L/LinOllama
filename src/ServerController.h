@@ -2,6 +2,8 @@
 
 #include <QObject>
 #include <QProcess>
+#include <QMap>
+#include <QString>
 #include <sys/types.h>
 
 // Detects how Ollama is currently running — systemd user service, systemd
@@ -63,6 +65,21 @@ private:
     // Runs a short-lived command synchronously, capped at timeoutMs.
     // Returns exit code, or -1 if it failed to start/timed out.
     int runSync(const QString &program, const QStringList &args, QString *stdOut = nullptr, int timeoutMs = 1500);
+
+    // Reads Settings' "ollamaServer/*" values (see SettingsDialog's Ollama
+    // tab) into a KEY=VALUE map, omitting anything left at its default —
+    // an empty map means nothing is configured, i.e. behave exactly as if
+    // this feature didn't exist.
+    QMap<QString, QString> configuredEnvironmentOverrides() const;
+    // Writes (or, if nothing's configured, removes) a systemd user drop-in
+    // at ~/.config/systemd/user/ollama.service.d/override.conf and reloads
+    // the user systemd daemon, so a systemd *user* service picks up
+    // configuredEnvironmentOverrides() on its next start. A no-op unless a
+    // user-scope ollama.service unit is actually known. Deliberately does
+    // NOT touch a system-scope unit — that would need pkexec to write a
+    // root-owned file, more invasive than this app should do unprompted;
+    // system-service users are expected to set these in their own unit file.
+    void applyUserSystemdEnvironmentOverride();
 
     RunMode m_lastMode = RunMode::Unknown;
 

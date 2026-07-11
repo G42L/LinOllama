@@ -231,29 +231,52 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     ollamaPageLayout->addWidget(modelGroup);
 
-    // --- Ollama tab: server environment (placeholder, not wired up yet) ----
+    // --- Ollama tab: server environment -------------------------------------
     auto *envGroup = new QGroupBox("Server environment");
     auto *envLayout = new QFormLayout(envGroup);
 
     auto *envHint = new QLabel(
-        "Read-only preview of Ollama's own server-level environment variables — editing them here "
-        "isn't implemented yet (set them in Ollama's service environment directly for now). Values "
-        "shown are Ollama's documented defaults, not necessarily what's actually configured on this "
-        "machine.");
+        "Applied the next time Ollama's server is (re)started via the tray menu's Start/Stop — not "
+        "for an already-running server. Takes effect for a systemd user service (a drop-in override "
+        "is written and reloaded automatically) or a plain process this app starts directly. A "
+        "systemd system service isn't modified automatically here; set these in its own unit file "
+        "instead. Leave a field at its default to omit that variable entirely, same as never having "
+        "set it.");
     envHint->setWordWrap(true);
     envHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
     envLayout->addRow(envHint);
 
-    // No members, no persistence, no signals — these are display-only
-    // placeholders until server-environment editing is actually built.
-    auto addDisabledEnvRow = [envLayout](const QString &label, QWidget *field) {
-        field->setEnabled(false);
-        envLayout->addRow(label, field);
-    };
-    addDisabledEnvRow("OLLAMA_MODELS", new QLineEdit("~/.ollama/models"));
-    addDisabledEnvRow("OLLAMA_KEEP_ALIVE", new QLineEdit("5m"));
-    addDisabledEnvRow("OLLAMA_FLASH_ATTENTION", new QCheckBox("Enabled"));
-    addDisabledEnvRow("OLLAMA_NUM_PARALLEL", new QLineEdit("auto"));
+    auto *modelsPathRow = new QHBoxLayout;
+    m_ollamaModelsPathEdit = new QLineEdit(QSettings().value("ollamaServer/modelsPath").toString());
+    m_ollamaModelsPathEdit->setPlaceholderText("~/.ollama/models (default)");
+    connect(m_ollamaModelsPathEdit, &QLineEdit::editingFinished,
+            this, &SettingsDialog::onOllamaModelsPathEdited);
+    modelsPathRow->addWidget(m_ollamaModelsPathEdit, /*stretch=*/1);
+    auto *modelsPathBrowseButton = new QPushButton("Browse…");
+    connect(modelsPathBrowseButton, &QPushButton::clicked,
+            this, &SettingsDialog::onBrowseOllamaModelsPathClicked);
+    modelsPathRow->addWidget(modelsPathBrowseButton);
+    envLayout->addRow("OLLAMA_MODELS", modelsPathRow);
+
+    m_ollamaKeepAliveEdit = new QLineEdit(QSettings().value("ollamaServer/keepAlive").toString());
+    m_ollamaKeepAliveEdit->setPlaceholderText("5m (default)");
+    connect(m_ollamaKeepAliveEdit, &QLineEdit::editingFinished,
+            this, &SettingsDialog::onOllamaKeepAliveEdited);
+    envLayout->addRow("OLLAMA_KEEP_ALIVE", m_ollamaKeepAliveEdit);
+
+    m_ollamaFlashAttentionCheck = new QCheckBox("Enabled");
+    m_ollamaFlashAttentionCheck->setChecked(QSettings().value("ollamaServer/flashAttention", false).toBool());
+    connect(m_ollamaFlashAttentionCheck, &QCheckBox::toggled,
+            this, &SettingsDialog::onOllamaFlashAttentionToggled);
+    envLayout->addRow("OLLAMA_FLASH_ATTENTION", m_ollamaFlashAttentionCheck);
+
+    m_ollamaNumParallelSpin = new QSpinBox;
+    m_ollamaNumParallelSpin->setRange(0, 64);
+    m_ollamaNumParallelSpin->setSpecialValueText("Auto (default)"); // 0 == unset, let Ollama decide
+    m_ollamaNumParallelSpin->setValue(QSettings().value("ollamaServer/numParallel", 0).toInt());
+    connect(m_ollamaNumParallelSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &SettingsDialog::onOllamaNumParallelChanged);
+    envLayout->addRow("OLLAMA_NUM_PARALLEL", m_ollamaNumParallelSpin);
 
     ollamaPageLayout->addWidget(envGroup);
     ollamaPageLayout->addStretch();
@@ -834,4 +857,45 @@ void SettingsDialog::onAudioInputComboChanged(int index)
     else
         QSettings().setValue("voice/audioInputDeviceId", deviceId);
     emit audioInputDeviceChanged();
+}
+
+void SettingsDialog::onOllamaModelsPathEdited()
+{
+    const QString path = m_ollamaModelsPathEdit->text().trimmed();
+    if (path.isEmpty())
+        QSettings().remove("ollamaServer/modelsPath");
+    else
+        QSettings().setValue("ollamaServer/modelsPath", path);
+}
+
+void SettingsDialog::onBrowseOllamaModelsPathClicked()
+{
+    const QString path = QFileDialog::getExistingDirectory(
+        this, "Select Ollama models folder", QDir::homePath());
+    if (path.isEmpty())
+        return;
+    m_ollamaModelsPathEdit->setText(path);
+    QSettings().setValue("ollamaServer/modelsPath", path);
+}
+
+void SettingsDialog::onOllamaKeepAliveEdited()
+{
+    const QString value = m_ollamaKeepAliveEdit->text().trimmed();
+    if (value.isEmpty())
+        QSettings().remove("ollamaServer/keepAlive");
+    else
+        QSettings().setValue("ollamaServer/keepAlive", value);
+}
+
+void SettingsDialog::onOllamaFlashAttentionToggled(bool enabled)
+{
+    QSettings().setValue("ollamaServer/flashAttention", enabled);
+}
+
+void SettingsDialog::onOllamaNumParallelChanged(int value)
+{
+    // 0 (the spin box's "Auto (default)" special value) means "unset" —
+    // stored as 0 either way, ServerController::configuredEnvironmentOverrides()
+    // is what actually treats <= 0 as "omit this variable."
+    QSettings().setValue("ollamaServer/numParallel", value);
 }

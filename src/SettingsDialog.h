@@ -18,6 +18,7 @@ class QSpinBox;
 class QTableWidget;
 class QProgressBar;
 class QToolButton;
+class QLineEdit;
 
 // App settings dialog: theme mode, plus an "Offload model" section mirroring
 // the one in the tray menu (same underlying OllamaClient calls) — built as a
@@ -102,6 +103,17 @@ private slots:
 
     void onAudioInputComboChanged(int index);
     void refreshAudioInputCombo();
+
+    // Persist straight to QSettings ("ollamaServer/*") — no live signal out
+    // of SettingsDialog, since these only take effect the next time
+    // ServerController actually starts Ollama (see its own
+    // configuredEnvironmentOverrides()/applyUserSystemdEnvironmentOverride()),
+    // not live like most other settings in this dialog.
+    void onOllamaModelsPathEdited();
+    void onBrowseOllamaModelsPathClicked();
+    void onOllamaKeepAliveEdited();
+    void onOllamaFlashAttentionToggled(bool enabled);
+    void onOllamaNumParallelChanged(int value);
 
 private:
     void rebuildLoadedModelsList(const QVector<LoadedModelInfo> &models);
@@ -198,4 +210,10 @@ private:
     // pins push-to-talk recording to it via "voice/audioInputDeviceId" in
     // QSettings, regardless of what the OS considers default afterward.
     QComboBox *m_audioInputCombo = nullptr;
+
+    // Ollama tab's "Server environment" group — see the onOllama*() slots.
+    QLineEdit *m_ollamaModelsPathEdit = nullptr;
+    QLineEdit *m_ollamaKeepAliveEdit = nullptr;
+    QCheckBox *m_ollamaFlashAttentionCheck = nullptr;
+    QSpinBox *m_ollamaNumParallelSpin = nullptr;
 };
