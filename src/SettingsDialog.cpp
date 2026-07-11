@@ -27,6 +27,8 @@
 #include <QMediaDevices>
 #include <QAudioDevice>
 #include <QSignalBlocker>
+#include <QTabWidget>
+#include <QLineEdit>
 
 SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
                                 WhisperManager *whisperManager, QWidget *parent)
@@ -36,17 +38,33 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     , m_whisperManager(whisperManager)
 {
     setWindowTitle("Settings");
-    setMinimumWidth(380);
-    // Tall enough that the "Model" group (context length slider + its hint
-    // text + the model-optimization checkbox + its own hint text) isn't
-    // cramped against the dialog's default height — without this, the
-    // dialog opens at just barely its sizeHint and the last section or two
-    // reads as cropped until manually resized.
-    setMinimumHeight(720);
+    setMinimumWidth(420);
+    // Comfortably tall enough for the fullest single tab (Whisper, with its
+    // model table) without the dialog needing to grow when switching tabs —
+    // each tab only holds a fraction of what used to be stacked in one long
+    // scroll, so this is noticeably shorter than before tabs existed.
+    setMinimumHeight(560);
 
     auto *layout = new QVBoxLayout(this);
 
-    // --- Appearance ------------------------------------------------------
+    auto *tabs = new QTabWidget;
+    layout->addWidget(tabs, /*stretch=*/1);
+
+    auto *appearancePage = new QWidget;
+    auto *appearancePageLayout = new QVBoxLayout(appearancePage);
+    auto *inputsPage = new QWidget;
+    auto *inputsPageLayout = new QVBoxLayout(inputsPage);
+    auto *ollamaPage = new QWidget;
+    auto *ollamaPageLayout = new QVBoxLayout(ollamaPage);
+    auto *whisperPage = new QWidget;
+    auto *whisperPageLayout = new QVBoxLayout(whisperPage);
+
+    tabs->addTab(appearancePage, "Appearance");
+    tabs->addTab(inputsPage, "Inputs");
+    tabs->addTab(ollamaPage, "Ollama");
+    tabs->addTab(whisperPage, "Whisper");
+
+    // --- Appearance tab ----------------------------------------------------
     // Wrapped in a bordered QGroupBox (rather than a bare QLabel heading)
     // so this section is unmistakably visible as its own block, not just
     // relying on font-weight to separate it from what's below.
@@ -132,9 +150,10 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     appearanceLayout->addRow(statsColorsRow);
 
-    layout->addWidget(appearanceGroup);
+    appearancePageLayout->addWidget(appearanceGroup);
+    appearancePageLayout->addStretch();
 
-    // --- Model ---------------------------------------------------------------
+    // --- Ollama tab: Model ---------------------------------------------------
     auto *modelGroup = new QGroupBox("Model");
     auto *modelLayout = new QVBoxLayout(modelGroup);
 
@@ -210,34 +229,36 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     modelOptimizationHint->setContentsMargins(0, 4, 0, 4);
     modelLayout->addWidget(modelOptimizationHint);
 
-    layout->addWidget(modelGroup);
+    ollamaPageLayout->addWidget(modelGroup);
 
-    // --- Offload model -----------------------------------------------------
-    auto *offloadGroup = new QGroupBox("Offload model");
-    auto *offloadLayout = new QVBoxLayout(offloadGroup);
+    // --- Ollama tab: server environment (placeholder, not wired up yet) ----
+    auto *envGroup = new QGroupBox("Server environment");
+    auto *envLayout = new QFormLayout(envGroup);
 
-    auto *offloadHeaderRow = new QHBoxLayout;
-    auto *offloadHint = new QLabel(
-        "Frees a model's memory/VRAM immediately instead of waiting for its normal idle timeout.");
-    offloadHint->setWordWrap(true);
-    offloadHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
-    offloadHeaderRow->addWidget(offloadHint, /*stretch=*/1);
-    auto *refreshButton = new QPushButton("Refresh");
-    connect(refreshButton, &QPushButton::clicked, this, &SettingsDialog::refreshLoadedModels);
-    offloadHeaderRow->addWidget(refreshButton);
-    offloadLayout->addLayout(offloadHeaderRow);
+    auto *envHint = new QLabel(
+        "Read-only preview of Ollama's own server-level environment variables — editing them here "
+        "isn't implemented yet (set them in Ollama's service environment directly for now). Values "
+        "shown are Ollama's documented defaults, not necessarily what's actually configured on this "
+        "machine.");
+    envHint->setWordWrap(true);
+    envHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    envLayout->addRow(envHint);
 
-    m_loadedModelsLayout = new QVBoxLayout;
-    m_loadedModelsLayout->setSpacing(4);
-    offloadLayout->addLayout(m_loadedModelsLayout);
+    // No members, no persistence, no signals — these are display-only
+    // placeholders until server-environment editing is actually built.
+    auto addDisabledEnvRow = [envLayout](const QString &label, QWidget *field) {
+        field->setEnabled(false);
+        envLayout->addRow(label, field);
+    };
+    addDisabledEnvRow("OLLAMA_MODELS", new QLineEdit("~/.ollama/models"));
+    addDisabledEnvRow("OLLAMA_KEEP_ALIVE", new QLineEdit("5m"));
+    addDisabledEnvRow("OLLAMA_FLASH_ATTENTION", new QCheckBox("Enabled"));
+    addDisabledEnvRow("OLLAMA_NUM_PARALLEL", new QLineEdit("auto"));
 
-    m_loadedModelsStatusLabel = new QLabel("Loading…");
-    m_loadedModelsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
-    m_loadedModelsLayout->addWidget(m_loadedModelsStatusLabel);
+    ollamaPageLayout->addWidget(envGroup);
+    ollamaPageLayout->addStretch();
 
-    layout->addWidget(offloadGroup);
-
-    // --- Microphone --------------------------------------------------------
+    // --- Inputs tab: Microphone ----------------------------------------------
     auto *micGroup = new QGroupBox("Microphone");
     auto *micLayout = new QHBoxLayout(micGroup);
 
@@ -253,9 +274,10 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     connect(m_audioInputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &SettingsDialog::onAudioInputComboChanged);
 
-    layout->addWidget(micGroup);
+    inputsPageLayout->addWidget(micGroup);
+    inputsPageLayout->addStretch();
 
-    // --- Voice transcription (Whisper) -------------------------------------
+    // --- Whisper tab: Voice transcription -----------------------------------
     auto *whisperGroup = new QGroupBox("Voice transcription (Whisper)");
     auto *whisperLayout = new QVBoxLayout(whisperGroup);
 
@@ -335,15 +357,37 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     whisperHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
     whisperLayout->addWidget(whisperHint);
 
-    layout->addWidget(whisperGroup);
+    whisperPageLayout->addWidget(whisperGroup);
+    whisperPageLayout->addStretch();
 
-    layout->addStretch();
+    // --- Offload model — deliberately OUTSIDE the tab widget ---------------
+    // Kept visible regardless of which tab is selected, rather than tucked
+    // into any one of them — unlike everything else here, this is an action
+    // someone might reach for in the middle of using the app (freeing VRAM
+    // right before loading a big model, etc.), not a one-time preference.
+    auto *offloadGroup = new QGroupBox("Offload model");
+    auto *offloadLayout = new QVBoxLayout(offloadGroup);
 
-    auto *placeholderNote = new QLabel(
-        "More settings (server connection, model defaults, keep-alive) coming soon.");
-    placeholderNote->setObjectName("settingsHint");
-    placeholderNote->setWordWrap(true);
-    layout->addWidget(placeholderNote);
+    auto *offloadHeaderRow = new QHBoxLayout;
+    auto *offloadHint = new QLabel(
+        "Frees a model's memory/VRAM immediately instead of waiting for its normal idle timeout.");
+    offloadHint->setWordWrap(true);
+    offloadHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    offloadHeaderRow->addWidget(offloadHint, /*stretch=*/1);
+    auto *refreshButton = new QPushButton("Refresh");
+    connect(refreshButton, &QPushButton::clicked, this, &SettingsDialog::refreshLoadedModels);
+    offloadHeaderRow->addWidget(refreshButton);
+    offloadLayout->addLayout(offloadHeaderRow);
+
+    m_loadedModelsLayout = new QVBoxLayout;
+    m_loadedModelsLayout->setSpacing(4);
+    offloadLayout->addLayout(m_loadedModelsLayout);
+
+    m_loadedModelsStatusLabel = new QLabel("Loading…");
+    m_loadedModelsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
+    m_loadedModelsLayout->addWidget(m_loadedModelsStatusLabel);
+
+    layout->addWidget(offloadGroup);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
