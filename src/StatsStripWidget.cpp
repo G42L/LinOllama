@@ -214,13 +214,14 @@ void StatsStripWidget::applyMeterColors()
     const QString ramColor = colorFor("stats/ramColor");
     const QString gpuColor = colorFor("stats/gpuColor");
     const QString vramColor = colorFor("stats/vramColor");
+    const QString micColor = colorFor("stats/micColor");
 
     if (m_cpuBar)
         styleMeterBar(m_cpuBar, trackColor, cpuColor);
     if (m_ramBar)
         styleMeterBar(m_ramBar, trackColor, ramColor);
     if (m_micBar)
-        styleMeterBar(m_micBar, trackColor, defaultColor); // no dedicated Settings color picker — just tracks the accent
+        styleMeterBar(m_micBar, trackColor, micColor);
     for (GpuMeterWidgets &meter : m_gpuMeters) {
         styleMeterBar(meter.utilBar, trackColor, gpuColor);
         styleMeterBar(meter.memBar, trackColor, vramColor);

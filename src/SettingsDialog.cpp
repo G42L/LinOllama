@@ -147,6 +147,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     addStatsColorColumn("RAM", "stats/ramColor");
     addStatsColorColumn("GPU", "stats/gpuColor");
     addStatsColorColumn("VRAM", "stats/vramColor");
+    addStatsColorColumn("Mic", "stats/micColor");
 
     appearanceLayout->addRow(statsColorsRow);
 
