@@ -473,6 +473,18 @@ QPushButton#editSaveButton:hover {
     border: 1px solid {{accent}};
 }
 
+/* The row holding attach/tools/model/voice/send (see ChatWidget's
+   constructor) is otherwise a plain, objectName-less QWidget, which would
+   fall back to the generic app-wide {{bg}} rule below — a different shade
+   than #inputCard's own {{surface}} fill just above. That mismatch showed
+   up as a visibly different-colored band behind the whole toolbar row, on
+   top of each individual button's own background — same root cause as
+   #messageRow's fix elsewhere in this file. Transparent lets the card's
+   own surface color show through with no seam. */
+#inputToolRow {
+    background-color: transparent;
+}
+
 #messageInput {
     background-color: transparent;
     border: none;
@@ -494,36 +506,66 @@ QPushButton#editSaveButton:hover {
     border-radius: 8px;
 }
 
+/* Flat, like the attach/tools/voice buttons it sits alongside — no filled
+   pill behind it. {{accent}} text/icon color is what keeps it visually
+   distinct as the primary action instead of the background. */
 QPushButton#sendButton {
-    background-color: {{accent}};
-    color: #FFFFFF;
+    background-color: transparent;
+    color: {{accent}};
     border: none;
-    border-radius: 10px;
-    padding: 8px 18px;
+    border-radius: 8px;
+    padding: 4px 10px;
     font-weight: 600;
 }
 
 QPushButton#sendButton:hover {
-    background-color: {{accentHover}};
+    background-color: {{menuButtonHoverBg}};
 }
 
 QPushButton#sendButton:disabled {
-    background-color: {{accentDisabledBg}};
-    color: #FFFFFF;
+    background-color: transparent;
+    color: {{secondaryText}};
 }
 
 /* "Thick arrow" mode (see SettingsDialog's "Send button" combo): a bigger,
-   bolder glyph in the same pill. Only what differs from the base rule above
-   needs restating; background/border/radius still apply. */
+   bolder glyph. Only what differs from the base rule above needs restating. */
 QPushButton#sendButton[arrowStyle="true"] {
     font-size: 18px;
     font-weight: 700;
-    padding: 6px 16px;
 }
 
 /* Paper-plane icon mode (default): square-ish padding since there's no text
    alongside the icon to balance against. */
 QPushButton#sendButton[planeStyle="true"] {
+    padding: 4px 8px;
+}
+
+/* "Filled send button" in Settings (off by default) — the button's original
+   look, a solid accent-colored pill, for anyone who preferred that over the
+   flat style above. These come after the flat rules above so they win on
+   the properties they both set, same [property="value"] override pattern
+   used throughout this file (e.g. #inputCard[focused="true"]). */
+QPushButton#sendButton[filled="true"] {
+    background-color: {{accent}};
+    color: #FFFFFF;
+    border-radius: 10px;
+    padding: 8px 18px;
+}
+
+QPushButton#sendButton[filled="true"]:hover {
+    background-color: {{accentHover}};
+}
+
+QPushButton#sendButton[filled="true"]:disabled {
+    background-color: {{accentDisabledBg}};
+    color: #FFFFFF;
+}
+
+QPushButton#sendButton[filled="true"][arrowStyle="true"] {
+    padding: 6px 16px;
+}
+
+QPushButton#sendButton[filled="true"][planeStyle="true"] {
     padding: 8px 10px;
 }
 

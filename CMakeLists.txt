@@ -23,6 +23,8 @@ add_executable(ollama-tray
     src/WebSearchClient.h
     src/VoiceRecorder.cpp
     src/VoiceRecorder.h
+    src/WhisperManager.cpp
+    src/WhisperManager.h
     src/MapEmbedWidget.cpp
     src/MapEmbedWidget.h
     src/ServerController.cpp

@@ -1,4 +1,4 @@
-# Ollama GUI
+# LinOllama GUI
 
 A native Qt6/C++ Linux desktop app for chatting with local [Ollama](https://ollama.com)
 models, with a system tray presence for controlling the Ollama server and
@@ -57,8 +57,11 @@ desktop client, in the spirit of Claude Desktop's look and feel.
 - **Web search tool**: a "Tools" toggle that looks up your message on
   **Wikipedia** (not a general web search engine — see Limitations) and
   folds the results into your message before sending.
-- **Voice button**: push-to-talk recording is fully functional, but
-  transcription is not — see Limitations.
+- **Voice button**: hold to record, release to transcribe (via a local
+  [Whisper](https://github.com/ggerganov/whisper.cpp) model — nothing is
+  sent anywhere) and auto-send. The input box fills in live as text comes
+  back, not just once the whole recording is processed. See "Voice
+  transcription" below for setup.
 - **Rich replies**: fenced ` ```html ` blocks render as real HTML (including
   inline SVG, auto-converted so Qt's renderer doesn't silently drop it) and
   remote `<img>` URLs load asynchronously; fenced ` ```map ` blocks (`{"query":
@@ -70,6 +73,34 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   default, in which case Ollama picks its own default. There is **no**
   "unlimited context" mode; every model has a hard ceiling from its own
   metadata that Ollama enforces regardless of what's requested.
+
+### Voice transcription
+
+- Local speech-to-text via [whisper.cpp](https://github.com/ggerganov/whisper.cpp)'s
+  `whisper-cli` binary, shelled out to per recording — no cloud service, no
+  network call, no API key.
+- **Auto-detection**: looks for `whisper-cli` and a `models/` folder at the
+  usual `~/whisper.cpp/build/bin/whisper-cli` location (falling back to
+  `PATH` and a couple of common install paths), both overridable in Settings.
+- **Model manager in Settings**: a compact table (Model/Speed/Accuracy plus
+  a Download-or-Use action; hover a row for disk size/memory/language/usage,
+  or expand the table for all columns at once) covering `tiny` through
+  `large-v3`, `.en` (English-only) variants included. Downloads straight
+  from Hugging Face with a progress bar.
+- **Default model picked automatically**: `medium` if it's downloaded, else
+  the best available among `large-v3` → `large-v3-turbo` → `small` → `base`
+  → `tiny` — never auto-picking an `.en` (English-only) model over a
+  multilingual one. Sticks once chosen (or once you pick one yourself) across
+  restarts.
+- **Microphone picker in Settings**, listing every input device Qt can see,
+  plus a live **"Mic" meter in the system stats strip** (CPU/RAM/GPU panel)
+  so you can actually see whether the selected device is producing signal
+  while you record — independent of whether the recording itself later comes
+  back silent, which makes it a genuine diagnostic, not just a decoration.
+- Recording is captured raw (not via a higher-level encoder pipeline),
+  downmixed to mono, resampled to the exact 16 kHz/16-bit PCM whisper.cpp
+  requires, and written to a temp WAV on a RAM-backed `tmpfs` (`/dev/shm`)
+  when available — deleted immediately after transcription, win or lose.
 
 ### Tray
 
@@ -118,6 +149,12 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   the AppIndicator/KStatusNotifierItem extension first — GNOME doesn't
   support tray icons out of the box, and the app will refuse to start
   without one.
+- **Optional, for voice transcription**: a built
+  [whisper.cpp](https://github.com/ggerganov/whisper.cpp) — clone it,
+  `cmake -B build && cmake --build build --target whisper-cli`, and download
+  at least one `ggml-*.bin` model (Settings' model manager can do this part
+  for you). Everything else in the app works fine without it; the voice
+  button just reports it isn't configured yet.
 - Linux — GPU monitoring in particular is Linux-specific (sysfs, NVML via
   `dlopen`), and server control assumes systemd or a plain Unix process.
 
@@ -160,18 +197,19 @@ install yet — see Limitations.
   through the app removes its file; there's no separate export/import.
 - **Settings**: `~/.config/ollama-tray/ollama-tray.conf` (theme, accent/meter
   colors, send button style, context-length override, model-optimization
-  toggle). Delete this file to reset everything to defaults.
-- Nothing is sent anywhere except your configured Ollama server and — only
-  when you explicitly enable the web search tool for a message — Wikipedia's
-  public API.
+  toggle, Whisper binary/models-folder/selected-model paths, microphone
+  device). Delete this file to reset everything to defaults.
+- Nothing is sent anywhere except your configured Ollama server, your
+  selected microphone → the local whisper.cpp process (never leaves the
+  machine), and — only when you explicitly enable the web search tool for a
+  message — Wikipedia's public API.
 
 ## Known limitations
 
-- **Voice transcription isn't implemented.** Recording itself works (real
-  audio capture to a temp WAV file), but nothing converts it to text yet —
-  using it shows an explicit "not implemented yet" message rather than
-  silently doing nothing. Ollama has no speech-to-text of its own; this is
-  waiting on a local engine (e.g. Whisper) being wired in.
+- **No in-app whisper.cpp build/install automation.** The app auto-detects
+  an existing `whisper-cli` binary and can download *models*, but you still
+  need to clone and build whisper.cpp yourself first — see Requirements.
+  Also CPU-only: there's no GPU-acceleration toggle for transcription.
 - **Web search is Wikipedia-only.** It's a genuinely useful "look this up"
   tool, but it is not a general web search engine — general search engines
   either block non-browser API access or require a paid key, and adding one
@@ -241,9 +279,15 @@ look. If a different conversation's turn was queued behind this one and a
 model swap was needed, also check whether the swap (an explicit unload)
 actually completed on the Ollama side.
 
-**Voice button does nothing useful.**
-Expected for now — see Limitations. The recording itself works; there's
-just no transcription engine wired in yet, so nothing gets sent.
+**Voice transcription fails or says it isn't configured.**
+Check Settings' "Voice transcription (Whisper)" section: it needs a built
+`whisper-cli` binary and at least one downloaded model (both auto-detected
+from a standard `~/whisper.cpp` checkout, or set manually). If a model is
+selected but transcription still comes back empty, check the "Mic" meter in
+the system stats strip while holding the record button — if it doesn't move
+at all, the wrong input device is likely selected in Settings' microphone
+picker; if it does move but transcription still fails, the error message
+now surfaces whisper-cli's actual diagnostic line rather than a generic one.
 
 ## Contributing / project layout
 
@@ -254,6 +298,10 @@ Single Qt6 Widgets application, no QML. Key files:
 - `ChatQueue` — serializes/schedules turns across conversations against the
   one real Ollama server.
 - `OllamaClient` — thin wrapper over Ollama's REST API, multi-stream-capable.
+- `WhisperManager` — detects/configures `whisper-cli` and its models,
+  downloads new ones, and runs transcription as a subprocess.
+- `VoiceRecorder` — raw microphone capture (push-to-talk), live level
+  metering, and 16 kHz mono WAV encoding for `WhisperManager`.
 - `ConversationStore` — in-memory conversation list mirrored to per-file JSON.
 - `SystemMonitor` — CPU/RAM/GPU polling.
 - `ServerController` — detects and drives whichever mechanism (systemd

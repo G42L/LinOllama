@@ -35,6 +35,15 @@ public slots:
     // from MainWindow when SettingsDialog reports a color change.
     void applyMeterColors();
 
+    // Relayed from ChatWidget::audioLevelChanged() (itself relayed from
+    // VoiceRecorder), level in 0.0..1.0 — updates the "Mic" meter live while
+    // push-to-talk is held, and drops back to "--" the moment recording
+    // stops (VoiceRecorder always emits one final 0.0, see its own
+    // audioLevelChanged() doc comment). Exists mainly as a way to see
+    // whether the selected input device is actually producing signal at
+    // all, independent of whether the recorded file itself comes out silent.
+    void setMicLevel(qreal level);
+
 private slots:
     void onStatsUpdated(double cpuPercent,
                          quint64 ramUsedKB, quint64 ramTotalKB,
@@ -62,6 +71,9 @@ private:
 
     QLabel *m_ramValueLabel = nullptr;
     QProgressBar *m_ramBar = nullptr;
+
+    QLabel *m_micValueLabel = nullptr;
+    QProgressBar *m_micBar = nullptr;
 
     QWidget *m_gpuSection = nullptr; // container the GPU meters get added to
     QVector<GpuMeterWidgets> m_gpuMeters;

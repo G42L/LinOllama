@@ -24,11 +24,12 @@
 #include <QMessageBox>
 
 ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
-                       QWidget *parent)
+                       WhisperManager *whisperManager, QWidget *parent)
     : QWidget(parent)
     , m_ollamaClient(ollamaClient)
     , m_store(store)
     , m_themeManager(themeManager)
+    , m_whisperManager(whisperManager)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -164,6 +165,7 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     cardLayout->addWidget(m_inputEdit);
 
     auto *toolRow = new QWidget;
+    toolRow->setObjectName("inputToolRow");
     auto *toolLayout = new QHBoxLayout(toolRow);
     toolLayout->setContentsMargins(0, 4, 0, 0);
     toolLayout->setSpacing(8);
@@ -228,15 +230,32 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     toolLayout->addWidget(m_voiceButton);
     connect(&m_voiceRecorder, &VoiceRecorder::recordingFinished, this, &ChatWidget::onVoiceRecordingFinished);
     connect(&m_voiceRecorder, &VoiceRecorder::recordingFailed, this, &ChatWidget::onVoiceRecordingFailed);
+    connect(&m_voiceRecorder, &VoiceRecorder::audioLevelChanged, this, &ChatWidget::audioLevelChanged);
+    if (m_whisperManager) {
+        connect(m_whisperManager, &WhisperManager::transcriptionFinished,
+                this, &ChatWidget::onWhisperTranscriptionFinished);
+        connect(m_whisperManager, &WhisperManager::transcriptionProgress,
+                this, &ChatWidget::onWhisperTranscriptionProgress);
+    }
 
     m_sendButton = new QPushButton;
     m_sendButton->setObjectName("sendButton");
     m_sendButton->setIconSize(QSize(16, 16));
+    // Without this, Fusion still paints QPushButton's own raised/bevel
+    // chrome underneath whatever QSS says — background-color/border rules
+    // alone don't fully suppress it the way they do for a QToolButton with
+    // autoRaise(true). Flat hands painting over to QSS completely, which is
+    // what actually lets #sendButton's flat (default) rule read as truly
+    // flat instead of just a differently-colored version of the native frame.
+    m_sendButton->setFlat(true);
     connect(m_sendButton, &QPushButton::clicked, this, &ChatWidget::onSendButtonClicked);
     toolLayout->addWidget(m_sendButton);
     // Restores whatever was last saved in Settings (see SettingsDialog's
     // "Send button" combo) — defaults to the paper-plane icon.
     setSendButtonStyle(QSettings().value("chat/sendButtonStyle", "plane").toString());
+    // Restores the background style (see SettingsDialog's "Filled send
+    // button" checkbox) — defaults to flat/off, matching the new look.
+    setSendButtonFilled(QSettings().value("chat/sendButtonFilled", false).toBool());
 
     connect(&m_webSearchClient, &WebSearchClient::searchCompleted, this,
             [this](const QString &query, const QString &resultsText) {
@@ -319,6 +338,21 @@ void ChatWidget::setSendButtonStyle(const QString &style)
     reloadSendButtonIcon();
 }
 
+void ChatWidget::setSendButtonFilled(bool filled)
+{
+    m_sendButtonFilled = filled;
+
+    // Drives Theme.cpp's QPushButton#sendButton[filled="true"] rules — the
+    // base (unfilled) rule already covers the flat/default look.
+    m_sendButton->setProperty("filled", filled);
+    m_sendButton->style()->unpolish(m_sendButton);
+    m_sendButton->style()->polish(m_sendButton);
+
+    reloadSendButtonIcon();
+    if (m_isGenerating)
+        setSendButtonBusy(true); // re-picks the stop icon's color for the new background
+}
+
 void ChatWidget::refreshContextLengthSetting()
 {
     updateContextUsageDisplay();
@@ -327,6 +361,11 @@ void ChatWidget::refreshContextLengthSetting()
 void ChatWidget::setModelOptimizationEnabled(bool enabled)
 {
     m_chatQueue->setOptimizeModelSwaps(enabled);
+}
+
+void ChatWidget::refreshAudioInputDevice()
+{
+    m_voiceRecorder.refreshAudioInputDevice();
 }
 
 void ChatWidget::setActiveConversation(const QString &conversationId)
@@ -773,7 +812,12 @@ void ChatWidget::setSendButtonBusy(bool busy)
     if (busy) {
         m_sendButton->setText(QString());
         const bool dark = m_themeManager && m_themeManager->isDarkActive();
-        m_sendButton->setIcon(Theme::loadThemedIcon(":/icons/stop.svg", dark, 14, "onAccent"));
+        // Flat (default): "danger" (red), reading as a stop cue on its own
+        // with no background to help it stand out. Filled (classic look):
+        // "onAccent" (white), for contrast against the accent-colored pill
+        // that's still there in that mode.
+        m_sendButton->setIcon(Theme::loadThemedIcon(
+            ":/icons/stop.svg", dark, 14, m_sendButtonFilled ? "onAccent" : "danger"));
         m_sendButton->setToolTip("Stop generating");
     } else {
         m_sendButton->setToolTip(QString());
@@ -1323,6 +1367,12 @@ void ChatWidget::updateToolsButtonAppearance()
     reloadThemedIcons(); // each menu item's icon tints to accent while its own toggle is on
 }
 
+ChatWidget::~ChatWidget()
+{
+    if (!m_pendingVoiceFilePath.isEmpty())
+        QFile::remove(m_pendingVoiceFilePath);
+}
+
 void ChatWidget::onVoicePressed()
 {
     m_voiceButton->setProperty("recording", true);
@@ -1343,21 +1393,23 @@ void ChatWidget::onVoiceReleased()
 
 void ChatWidget::onVoiceRecordingFinished(const QString &filePath)
 {
-    const QString transcript = transcribeAudio(filePath);
-    QFile::remove(filePath); // nothing keeps the raw audio once transcribed (or not)
-
-    if (transcript.isEmpty()) {
-        appendMessageBubble("error",
-            "Voice recorded, but transcription isn't implemented yet, so nothing was sent. "
-            "(A real speech-to-text engine is planned as a follow-up — Ollama itself doesn't do this.)");
+    if (!m_whisperManager) {
+        QFile::remove(filePath);
+        appendMessageBubble("error", "Voice recorded, but Whisper isn't available in this build.");
         return;
     }
 
-    // Once transcription is real, this is what makes voice "trigger a send
-    // directly" rather than just filling the box: no other change needed
-    // here, transcribeAudio() returning real text is the whole switch.
-    m_inputEdit->setPlainText(transcript);
-    onSendClicked();
+    // Kept until onWhisperTranscriptionFinished() fires — whisper-cli runs
+    // as a real subprocess (see WhisperManager::transcribe), so this is
+    // async rather than a same-call return.
+    m_pendingVoiceFilePath = filePath;
+    // Disabled for the same reason it's disabled mid-reply: whisper-cli is
+    // about to start overwriting this box's contents live (see
+    // onWhisperTranscriptionProgress()), so typing into it at the same time
+    // would just get clobbered. Re-enabled in onWhisperTranscriptionFinished().
+    setInputEnabled(false);
+    m_inputEdit->clear();
+    m_whisperManager->transcribe(filePath);
 }
 
 void ChatWidget::onVoiceRecordingFailed(const QString &errorMessage)
@@ -1365,13 +1417,35 @@ void ChatWidget::onVoiceRecordingFailed(const QString &errorMessage)
     appendMessageBubble("error", "Voice recording failed: " + errorMessage);
 }
 
-QString ChatWidget::transcribeAudio(const QString &filePath) const
+void ChatWidget::onWhisperTranscriptionProgress(const QString &partialText)
 {
-    Q_UNUSED(filePath);
-    // Placeholder — see VoiceRecorder's header comment and this method's
-    // declaration. Returning empty tells onVoiceRecordingFinished() there's
-    // nothing to send yet.
-    return QString();
+    m_inputEdit->setPlainText(partialText);
+    m_inputEdit->moveCursor(QTextCursor::End);
+}
+
+void ChatWidget::onWhisperTranscriptionFinished(const QString &text, bool success, const QString &error)
+{
+    if (!m_pendingVoiceFilePath.isEmpty()) {
+        // Nothing keeps the raw audio around once whisper-cli is done with
+        // it — VoiceRecorder writes it to a tmpfs-backed path when one's
+        // available (see its own header comment) so it never really touches
+        // a disk either, but it's still an on-disk path as far as this app
+        // is concerned, hence the explicit remove() rather than relying on
+        // the OS to eventually reclaim /tmp.
+        QFile::remove(m_pendingVoiceFilePath);
+        m_pendingVoiceFilePath.clear();
+    }
+
+    setInputEnabled(true);
+
+    if (!success) {
+        appendMessageBubble("error", "Voice transcription failed: " + error);
+        return;
+    }
+
+    // Voice "trigger a send directly" rather than just filling the box.
+    m_inputEdit->setPlainText(text);
+    onSendClicked();
 }
 
 void ChatWidget::reloadThemedIcons()
@@ -1393,13 +1467,10 @@ void ChatWidget::reloadThemedIcons()
         ":/icons/web-search.svg", dark, 16, m_webSearchEnabled ? "accent" : "secondaryText"));
     m_thinkingAction->setIcon(Theme::loadThemedIcon(
         ":/icons/thinking.svg", dark, 16, m_thinkingEnabled ? "accent" : "secondaryText"));
-    // The button's own "recording" property (set synchronously in
-    // onVoicePressed()/onVoiceReleased()), not m_voiceRecorder.isRecording()
-    // — QMediaRecorder::stop() is asynchronous, so isRecording() briefly
-    // still reads true right after onVoiceReleased() calls stopRecording(),
-    // which painted the icon red one extra time with nothing left to ever
-    // correct it afterward (nothing was connected to the recorder's own
-    // state-changed signal to refresh it again once it actually stopped).
+    // The button's own "recording" property, set synchronously in
+    // onVoicePressed()/onVoiceReleased() — simpler than reading
+    // m_voiceRecorder.isRecording() and just as correct now that
+    // stopRecording() updates its own state synchronously too.
     const bool recordingUi = m_voiceButton->property("recording").toBool();
     m_voiceButton->setIcon(Theme::loadThemedIcon(
         ":/icons/microphone.svg", dark, 16, recordingUi ? "danger" : "secondaryText"));
@@ -1416,10 +1487,12 @@ void ChatWidget::reloadSendButtonIcon()
     }
 
     const bool dark = m_themeManager && m_themeManager->isDarkActive();
-    // "onAccent" (white in both themes) rather than a theme-following tone
-    // — the icon sits on the button's solid accent-colored fill, which
-    // needs steady contrast regardless of light/dark mode.
-    m_sendButton->setIcon(Theme::loadThemedIcon(":/icons/send.svg", dark, 16, "onAccent"));
+    // Flat (default): "accent", since the icon itself has to carry the
+    // color that used to come from a solid accent-colored fill. Filled
+    // (classic look): "onAccent" (white), for contrast against that fill
+    // now that it's back.
+    m_sendButton->setIcon(Theme::loadThemedIcon(
+        ":/icons/send.svg", dark, 16, m_sendButtonFilled ? "onAccent" : "accent"));
 }
 
 void ChatWidget::rebuildAttachmentsBar()

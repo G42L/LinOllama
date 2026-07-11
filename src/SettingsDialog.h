@@ -6,6 +6,7 @@
 #include <QString>
 #include "ThemeManager.h"
 #include "OllamaClient.h"
+#include "WhisperManager.h"
 
 class QComboBox;
 class QVBoxLayout;
@@ -14,6 +15,9 @@ class QPushButton;
 class QCheckBox;
 class QSlider;
 class QSpinBox;
+class QTableWidget;
+class QProgressBar;
+class QToolButton;
 
 // App settings dialog: theme mode, plus an "Offload model" section mirroring
 // the one in the tray menu (same underlying OllamaClient calls) — built as a
@@ -25,7 +29,8 @@ class SettingsDialog : public QDialog
     Q_OBJECT
 
 public:
-    explicit SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient, QWidget *parent = nullptr);
+    explicit SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
+                             WhisperManager *whisperManager, QWidget *parent = nullptr);
 
 signals:
     // Emitted live as soon as the "Send button" combo changes (the dialog
@@ -34,6 +39,12 @@ signals:
     // slot that emits this, via QSettings, so it's also restored at next
     // launch. style is one of "plane" (default), "arrow", or "text".
     void sendButtonStyleChanged(const QString &style);
+
+    // Emitted live as soon as the "Filled send button" checkbox changes —
+    // same live-preview/persistence pattern as sendButtonStyleChanged just
+    // above. false (default, unchecked): flat, matching the attach/tools/
+    // voice buttons. true: the button's original solid accent-colored pill.
+    void sendButtonFilledChanged(bool filled);
 
     // Emitted whenever any color (Application or a stats meter) is changed
     // or individually reset to default — StatsStripWidget listens live
@@ -56,15 +67,32 @@ signals:
     // ("chat/modelOptimization") already happened by the time this fires.
     void modelOptimizationChanged(bool enabled);
 
+    // Emitted whenever the microphone combo changes — ChatWidget listens
+    // live and forwards it straight to VoiceRecorder::refreshAudioInputDevice().
+    // Persistence to QSettings ("voice/audioInputDeviceId") already happened
+    // by the time this fires.
+    void audioInputDeviceChanged();
+
 private slots:
     void onThemeComboChanged(int index);
     void onSendButtonStyleComboChanged(int index);
+    void onSendButtonFilledToggled(bool filled);
     void onContextLengthEnabledToggled(bool enabled);
     void onContextLengthValueChanged(int value);
     void onModelOptimizationToggled(bool enabled);
     void onLoadedModelsListed(const QVector<LoadedModelInfo> &models);
     void onModelUnloaded(const QString &model, bool success);
     void refreshLoadedModels();
+
+    void onWhisperModelsChanged();
+    void onWhisperDownloadProgress(const QString &modelId, qint64 received, qint64 total);
+    void onWhisperDownloadFinished(const QString &modelId, bool success, const QString &error);
+    void onChangeWhisperBinaryClicked();
+    void onChangeWhisperModelsDirClicked();
+    void onWhisperExpandToggleClicked();
+
+    void onAudioInputComboChanged(int index);
+    void refreshAudioInputCombo();
 
 private:
     void rebuildLoadedModelsList(const QVector<LoadedModelInfo> &models);
@@ -79,6 +107,38 @@ private:
     // tracks the Application color, so changing that one has to refresh
     // every other swatch as well).
     QWidget *makeColorPickerRow(const QString &settingsKey);
+
+    // Rebuilds m_whisperModelsTable's rows from scratch — the catalog is
+    // fixed, so this just re-derives each row's install/selection/download
+    // state (installed models, the current selection, any in-flight
+    // download) rather than patching individual cells. Cheap enough to call
+    // on every relevant event except raw download progress ticks, which
+    // update their row's existing QProgressBar directly instead (see
+    // onWhisperDownloadProgress()) to avoid rebuilding the whole table
+    // several times a second while a download is running.
+    void rebuildWhisperModelsTable();
+    void refreshWhisperStatusLabel();
+    // Swaps m_whisperExpandButton's icon between expand.svg/contract.svg for
+    // the current m_whisperTableExpanded state — called once at construction
+    // and again on every toggle (the dialog itself is never long-lived
+    // enough to need a live theme-change hookup like ChatWidget's icons do;
+    // a fresh SettingsDialog is constructed each time Settings is opened).
+    void updateWhisperExpandIcon();
+
+    WhisperManager *m_whisperManager = nullptr;
+    QLabel *m_whisperStatusLabel = nullptr;
+    QTableWidget *m_whisperModelsTable = nullptr;
+    QToolButton *m_whisperExpandButton = nullptr;
+    // Minimal (default): Model/Speed/Accuracy/action only, with disk size,
+    // memory, language, and usage blurb folded into each row's tooltip
+    // instead of their own columns — full: every catalog column shown at
+    // once. Toggled via m_whisperExpandButton; not persisted, since it's
+    // just a display convenience rather than a real setting.
+    bool m_whisperTableExpanded = false;
+    // Row action-cell progress bars, keyed by model id — only present for a
+    // model currently downloading, looked up directly by
+    // onWhisperDownloadProgress() instead of rebuilding the table per tick.
+    QHash<QString, QProgressBar *> m_whisperProgressBars;
     // The stored hex for settingsKey, or its fallback if nothing's been
     // saved: the effective accent (Theme::currentAccentColor()) for a
     // stats-meter key, or the theme's own built-in default for the
@@ -96,6 +156,7 @@ private:
 
     QComboBox *m_themeCombo = nullptr;
     QComboBox *m_sendButtonStyleCombo = nullptr;
+    QCheckBox *m_sendButtonFilledCheck = nullptr; // "Filled send button" — see sendButtonFilledChanged()
     QVector<QPair<QPushButton *, QString>> m_colorSwatchButtons; // (swatch button, settingsKey) — see makeColorPickerRow()
 
     // Context length: "Use custom context length" gates a 1..262144
@@ -120,4 +181,11 @@ private:
 
     QVBoxLayout *m_loadedModelsLayout = nullptr; // rows get inserted/cleared here
     QLabel *m_loadedModelsStatusLabel = nullptr;  // "Loading…" / "No models loaded" placeholder
+
+    // "System default" (empty itemData) plus one entry per
+    // QMediaDevices::audioInputs() (itemData = QAudioDevice::id(), a
+    // QByteArray) — see refreshAudioInputCombo(). Picking a specific device
+    // pins push-to-talk recording to it via "voice/audioInputDeviceId" in
+    // QSettings, regardless of what the OS considers default afterward.
+    QComboBox *m_audioInputCombo = nullptr;
 };

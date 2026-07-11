@@ -17,11 +17,13 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
                         OllamaClient *ollamaClient,
                         ConversationStore *store,
                         ThemeManager *themeManager,
+                        WhisperManager *whisperManager,
                         QWidget *parent)
     : QMainWindow(parent)
     , m_store(store)
     , m_ollamaClient(ollamaClient)
     , m_themeManager(themeManager)
+    , m_whisperManager(whisperManager)
 {
     setWindowTitle("Ollama GUI");
     resize(1000, 650);
@@ -94,7 +96,7 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     sidebarLayout->addWidget(m_settingsButton, 0, Qt::AlignLeft);
 
     // --- Chat -------------------------------------------------------------
-    m_chatWidget = new ChatWidget(ollamaClient, store, themeManager);
+    m_chatWidget = new ChatWidget(ollamaClient, store, themeManager, whisperManager);
     connect(m_chatWidget, &ChatWidget::conversationTitleMayHaveChanged,
             this, &MainWindow::onConversationTitleMayHaveChanged);
     connect(m_chatWidget, &ChatWidget::conversationCreated,
@@ -102,6 +104,8 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
 
     // --- Stats strip --------------------------------------------------------
     m_statsStrip = new StatsStripWidget(systemMonitor, themeManager);
+    connect(m_chatWidget, &ChatWidget::audioLevelChanged,
+            m_statsStrip, &StatsStripWidget::setMicLevel);
 
     // All three panes live in one splitter so every boundary between them
     // is drag-resizable, sidebar included. setChildrenCollapsible(false)
@@ -209,11 +213,19 @@ void MainWindow::onModelsListed(const QStringList &modelNames)
 
 void MainWindow::onSettingsRequested()
 {
-    SettingsDialog dialog(m_themeManager, m_ollamaClient, this);
+    SettingsDialog dialog(m_themeManager, m_ollamaClient, m_whisperManager, this);
     connect(&dialog, &SettingsDialog::sendButtonStyleChanged,
             m_chatWidget, &ChatWidget::setSendButtonStyle);
+    connect(&dialog, &SettingsDialog::sendButtonFilledChanged,
+            m_chatWidget, &ChatWidget::setSendButtonFilled);
     connect(&dialog, &SettingsDialog::statsColorsChanged,
             m_statsStrip, &StatsStripWidget::applyMeterColors);
+    connect(&dialog, &SettingsDialog::contextLengthSettingChanged,
+            m_chatWidget, &ChatWidget::refreshContextLengthSetting);
+    connect(&dialog, &SettingsDialog::modelOptimizationChanged,
+            m_chatWidget, &ChatWidget::setModelOptimizationEnabled);
+    connect(&dialog, &SettingsDialog::audioInputDeviceChanged,
+            m_chatWidget, &ChatWidget::refreshAudioInputDevice);
     dialog.exec();
 }
 

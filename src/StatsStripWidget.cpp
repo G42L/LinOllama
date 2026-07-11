@@ -27,6 +27,9 @@ StatsStripWidget::StatsStripWidget(SystemMonitor *systemMonitor, ThemeManager *t
     m_ramBar = makeMeter(this, "RAM", &m_ramValueLabel);
     layout->addWidget(m_ramBar->parentWidget());
 
+    m_micBar = makeMeter(this, "Mic", &m_micValueLabel);
+    layout->addWidget(m_micBar->parentWidget());
+
     // GPU meters are built lazily once we know how many GPUs exist, so this
     // is just an anchor container they get appended into.
     m_gpuSection = new QWidget;
@@ -162,6 +165,13 @@ void StatsStripWidget::onStatsUpdated(double cpuPercent,
     }
 }
 
+void StatsStripWidget::setMicLevel(qreal level)
+{
+    const int percent = static_cast<int>(qBound(0.0, level, 1.0) * 100.0);
+    m_micBar->setValue(percent);
+    m_micValueLabel->setText(percent > 0 ? QString("%1%").arg(percent) : "--");
+}
+
 QString StatsStripWidget::formatKB(quint64 kb)
 {
     constexpr double MB = 1024.0;
@@ -209,6 +219,8 @@ void StatsStripWidget::applyMeterColors()
         styleMeterBar(m_cpuBar, trackColor, cpuColor);
     if (m_ramBar)
         styleMeterBar(m_ramBar, trackColor, ramColor);
+    if (m_micBar)
+        styleMeterBar(m_micBar, trackColor, defaultColor); // no dedicated Settings color picker — just tracks the accent
     for (GpuMeterWidgets &meter : m_gpuMeters) {
         styleMeterBar(meter.utilBar, trackColor, gpuColor);
         styleMeterBar(meter.memBar, trackColor, vramColor);

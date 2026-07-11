@@ -11,5 +11,7 @@
         <file>icons/new-chat.svg</file>
         <file>icons/sidebar-collapse.svg</file>
         <file>icons/sidebar-expand.svg</file>
+        <file>icons/expand.svg</file>
+        <file>icons/contract.svg</file>
     </qresource>
 </RCC>

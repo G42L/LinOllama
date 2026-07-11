@@ -13,6 +13,7 @@
 #include "ChatWidget.h"
 #include "StatsStripWidget.h"
 #include "ThemeManager.h"
+#include "WhisperManager.h"
 
 // The main application window: a persistent top bar (new-conversation +
 // sidebar collapse/expand, both icon-only) above a resizable conversation
@@ -33,6 +34,7 @@ public:
                OllamaClient *ollamaClient,
                ConversationStore *store,
                ThemeManager *themeManager,
+               WhisperManager *whisperManager,
                QWidget *parent = nullptr);
 
 protected:
@@ -108,6 +110,7 @@ private:
     ConversationStore *m_store = nullptr;
     OllamaClient *m_ollamaClient = nullptr;
     ThemeManager *m_themeManager = nullptr;
+    WhisperManager *m_whisperManager = nullptr;
 
     QWidget *m_sidebar = nullptr; // the whole left pane, shown/hidden by setSidebarCollapsed()
     QListWidget *m_sidebarList = nullptr;

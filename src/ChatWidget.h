@@ -19,6 +19,7 @@
 #include "AutoHeightTextBrowser.h"
 #include "WebSearchClient.h"
 #include "VoiceRecorder.h"
+#include "WhisperManager.h"
 #include "MapEmbedWidget.h"
 
 class QVBoxLayout;
@@ -41,7 +42,13 @@ public:
     // as ollamaClient/store) — only used to know light-vs-dark for
     // reloadThemedIcons() and to hear about live theme switches.
     ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
-               QWidget *parent = nullptr);
+               WhisperManager *whisperManager, QWidget *parent = nullptr);
+    // Deletes m_pendingVoiceFilePath if the app is closed while a
+    // transcription is still in flight — otherwise it'd never get cleaned
+    // up, since onWhisperTranscriptionFinished() is what normally does that
+    // and it would never fire once this widget (and the transcribe() call
+    // it's waiting on) is gone.
+    ~ChatWidget() override;
 
     // Switches which conversation is displayed/edited. Pass an empty string
     // to show an empty state (e.g. no conversation selected yet).
@@ -59,6 +66,13 @@ public:
     // last saved choice) and again live whenever Settings changes it.
     void setSendButtonStyle(const QString &style);
 
+    // Applies the "Send" button's background treatment — false (default):
+    // flat, matching the attach/tools/voice buttons it sits next to; true:
+    // the old solid accent-colored pill. Same "caller persists, this just
+    // applies" pattern as setSendButtonStyle() above — see SettingsDialog's
+    // "Filled send button" checkbox.
+    void setSendButtonFilled(bool filled);
+
     // Re-reads "chat/useCustomContextLength"/"chat/customContextLength"
     // from QSettings and refreshes the context-usage bar accordingly —
     // called live when SettingsDialog's context-length checkbox/slider
@@ -73,6 +87,12 @@ public:
     // changes (whether the queue may reorder turns to group by currently-
     // loaded model, vs. always running them strictly in submitted order).
     void setModelOptimizationEnabled(bool enabled);
+
+    // Re-applies the "voice/audioInputDeviceId" QSettings value to the
+    // recorder — see VoiceRecorder::refreshAudioInputDevice(). Called live
+    // when SettingsDialog's microphone combo changes, same pattern as
+    // refreshContextLengthSetting() above.
+    void refreshAudioInputDevice();
 
 protected:
     // Watches two unrelated children, both for things QSS/layouts can't
@@ -98,6 +118,12 @@ signals:
     // the sidebar yet), so MainWindow can select the new row.
     void conversationCreated(const QString &conversationId);
 
+    // Straight relay of VoiceRecorder::audioLevelChanged() — MainWindow
+    // wires this to StatsStripWidget::setMicLevel() so the "Mic" meter in
+    // the system stats strip lives up there rather than ChatWidget reaching
+    // into a sibling widget itself.
+    void audioLevelChanged(qreal level);
+
 private slots:
     // Connected to m_sendButton::clicked — dispatches to onSendClicked() or
     // onStopClicked() depending on m_isGenerating, since the button is
@@ -119,6 +145,11 @@ private slots:
     void onVoiceReleased();
     void onVoiceRecordingFinished(const QString &filePath);
     void onVoiceRecordingFailed(const QString &errorMessage);
+    void onWhisperTranscriptionFinished(const QString &text, bool success, const QString &error);
+    // Live feedback while whisper-cli is still running — see WhisperManager::
+    // transcriptionProgress(). Just fills the input box with whatever's been
+    // transcribed so far, same as the final text does, minus the auto-send.
+    void onWhisperTranscriptionProgress(const QString &partialText);
     void onChatDelta(const QString &conversationId, const QString &tokenText);
     void onChatThinkingDelta(const QString &conversationId, const QString &tokenText);
     void onChatDone(const QString &conversationId);
@@ -253,12 +284,6 @@ private:
     // same prompt, new answer. Connected to each user bubble's "Retry" button.
     void retryMessage(int messageIndex);
 
-    // Placeholder for real speech-to-text — Ollama has no such capability
-    // itself, so this is where a local Whisper integration will plug in
-    // later. Returns an empty string for now, which
-    // onVoiceRecordingFinished() treats as "nothing to send."
-    QString transcribeAudio(const QString &filePath) const;
-
     void updateToolsButtonAppearance();
     // Re-derives the web-search/thinking/microphone SVG icons for the
     // current theme (light/dark) and toggle/recording state — called at
@@ -359,6 +384,7 @@ private:
     QPushButton *m_sendButton = nullptr;
     QToolButton *m_attachButton = nullptr;
     QString m_sendButtonStyle = "plane"; // "plane" | "arrow" | "text" — see setSendButtonStyle()
+    bool m_sendButtonFilled = false; // false = flat (default), true = classic accent pill — see setSendButtonFilled()
 
     // "Tools" dropdown (right of the attach button): checkable Search-the-web
     // and Thinking toggles. Persistent QMenu (not rebuilt per click, unlike
@@ -370,10 +396,15 @@ private:
     bool m_thinkingEnabled = true;   // matches this app's prior always-on behavior
 
     // Push-to-talk mic button, between the model combo and Send. Recording
-    // itself is real (see VoiceRecorder); turning the audio into text isn't
-    // yet (see transcribeAudio()).
+    // is VoiceRecorder's job; turning the resulting .wav into text is
+    // WhisperManager's (shared, not owned here — see main.cpp).
     QToolButton *m_voiceButton = nullptr;
     VoiceRecorder m_voiceRecorder;
+    WhisperManager *m_whisperManager = nullptr;
+    // The .wav VoiceRecorder just finished writing, kept around only until
+    // onWhisperTranscriptionFinished() fires (transcription is async), so it
+    // can be deleted once WhisperManager is done with it either way.
+    QString m_pendingVoiceFilePath;
 
     // Holds the message being sent while an async web search is in flight
     // (see onSendClicked()/finalizeAndSendUserMessage()) — unused, empty

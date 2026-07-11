@@ -15,11 +15,25 @@
 #include <QCheckBox>
 #include <QSlider>
 #include <QSpinBox>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QProgressBar>
+#include <QRadioButton>
+#include <QButtonGroup>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QDir>
+#include <QToolButton>
+#include <QMediaDevices>
+#include <QAudioDevice>
+#include <QSignalBlocker>
 
-SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient, QWidget *parent)
+SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
+                                WhisperManager *whisperManager, QWidget *parent)
     : QDialog(parent)
     , m_themeManager(themeManager)
     , m_ollamaClient(ollamaClient)
+    , m_whisperManager(whisperManager)
 {
     setWindowTitle("Settings");
     setMinimumWidth(380);
@@ -65,6 +79,13 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     connect(m_sendButtonStyleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &SettingsDialog::onSendButtonStyleComboChanged);
     appearanceLayout->addRow("Send button", m_sendButtonStyleCombo);
+
+    m_sendButtonFilledCheck = new QCheckBox("Filled send button (classic look)");
+    const bool sendButtonFilled = QSettings().value("chat/sendButtonFilled", false).toBool();
+    m_sendButtonFilledCheck->setChecked(sendButtonFilled);
+    connect(m_sendButtonFilledCheck, &QCheckBox::toggled,
+            this, &SettingsDialog::onSendButtonFilledToggled);
+    appearanceLayout->addRow(QString(), m_sendButtonFilledCheck);
 
     auto *colorsHeading = new QLabel("Colors");
     colorsHeading->setStyleSheet("font-weight: 600; margin-top: 6px;");
@@ -216,6 +237,89 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     layout->addWidget(offloadGroup);
 
+    // --- Microphone --------------------------------------------------------
+    auto *micGroup = new QGroupBox("Microphone");
+    auto *micLayout = new QHBoxLayout(micGroup);
+
+    micLayout->addWidget(new QLabel("Audio input"));
+    m_audioInputCombo = new QComboBox;
+    micLayout->addWidget(m_audioInputCombo, /*stretch=*/1);
+
+    auto *micRefreshButton = new QPushButton("Refresh");
+    connect(micRefreshButton, &QPushButton::clicked, this, &SettingsDialog::refreshAudioInputCombo);
+    micLayout->addWidget(micRefreshButton);
+
+    refreshAudioInputCombo();
+    connect(m_audioInputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::onAudioInputComboChanged);
+
+    layout->addWidget(micGroup);
+
+    // --- Voice transcription (Whisper) -------------------------------------
+    auto *whisperGroup = new QGroupBox("Voice transcription (Whisper)");
+    auto *whisperLayout = new QVBoxLayout(whisperGroup);
+
+    m_whisperStatusLabel = new QLabel;
+    m_whisperStatusLabel->setWordWrap(true);
+    m_whisperStatusLabel->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    whisperLayout->addWidget(m_whisperStatusLabel);
+
+    auto *whisperPathsRow = new QHBoxLayout;
+    auto *changeBinaryButton = new QPushButton("Whisper binary…");
+    connect(changeBinaryButton, &QPushButton::clicked, this, &SettingsDialog::onChangeWhisperBinaryClicked);
+    whisperPathsRow->addWidget(changeBinaryButton);
+    auto *changeModelsDirButton = new QPushButton("Models folder…");
+    connect(changeModelsDirButton, &QPushButton::clicked, this, &SettingsDialog::onChangeWhisperModelsDirClicked);
+    whisperPathsRow->addWidget(changeModelsDirButton);
+    whisperPathsRow->addStretch(1);
+    whisperLayout->addLayout(whisperPathsRow);
+
+    auto *whisperTableHeaderRow = new QHBoxLayout;
+    auto *whisperTableHeading = new QLabel("Models");
+    whisperTableHeading->setStyleSheet("font-weight: 600;");
+    whisperTableHeaderRow->addWidget(whisperTableHeading);
+    whisperTableHeaderRow->addStretch(1);
+    m_whisperExpandButton = new QToolButton;
+    m_whisperExpandButton->setObjectName("whisperExpandButton");
+    m_whisperExpandButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_whisperExpandButton->setIconSize(QSize(14, 14));
+    m_whisperExpandButton->setAutoRaise(true);
+    m_whisperExpandButton->setCursor(Qt::PointingHandCursor);
+    connect(m_whisperExpandButton, &QToolButton::clicked, this, &SettingsDialog::onWhisperExpandToggleClicked);
+    whisperTableHeaderRow->addWidget(m_whisperExpandButton);
+    whisperLayout->addLayout(whisperTableHeaderRow);
+
+    m_whisperModelsTable = new QTableWidget(0, 0);
+    m_whisperModelsTable->verticalHeader()->setVisible(false);
+    m_whisperModelsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_whisperModelsTable->setSelectionMode(QAbstractItemView::NoSelection);
+    m_whisperModelsTable->setShowGrid(false);
+    // No vertical scrollbar — the fixed height below already caps visible
+    // rows, with the rest reachable by scrolling the whole Settings dialog
+    // like everything else in it. Horizontal is "as needed" rather than off:
+    // the minimal view's columns always fit, but the expanded view's extra
+    // Disk/Memory/Language columns can genuinely overflow a narrow dialog
+    // (see rebuildWhisperModelsTable()'s resize-mode handling), and clipping
+    // those silently would be worse than a scrollbar appearing.
+    m_whisperModelsTable->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_whisperModelsTable->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    // Tall enough to show ~4-5 rows without the dialog itself having to grow
+    // to fit all ten catalog entries — the rest scroll internally.
+    m_whisperModelsTable->setMinimumHeight(160);
+    m_whisperModelsTable->setMaximumHeight(220);
+    whisperLayout->addWidget(m_whisperModelsTable);
+
+    auto *whisperHint = new QLabel(
+        "Recording is transcribed locally via whisper.cpp — nothing is sent anywhere. Pick which "
+        "downloaded model to use with the radio button in the last column; \".en\" models are "
+        "English-only but a little faster/more accurate for that language alone. Hover a row for "
+        "its full details.");
+    whisperHint->setWordWrap(true);
+    whisperHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    whisperLayout->addWidget(whisperHint);
+
+    layout->addWidget(whisperGroup);
+
     layout->addStretch();
 
     auto *placeholderNote = new QLabel(
@@ -235,6 +339,18 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
             this, &SettingsDialog::onModelUnloaded);
 
     refreshLoadedModels();
+
+    if (m_whisperManager) {
+        connect(m_whisperManager, &WhisperManager::modelsChanged,
+                this, &SettingsDialog::onWhisperModelsChanged);
+        connect(m_whisperManager, &WhisperManager::downloadProgress,
+                this, &SettingsDialog::onWhisperDownloadProgress);
+        connect(m_whisperManager, &WhisperManager::downloadFinished,
+                this, &SettingsDialog::onWhisperDownloadFinished);
+    }
+    refreshWhisperStatusLabel();
+    updateWhisperExpandIcon();
+    rebuildWhisperModelsTable();
 
     // Word-wrapped QLabels (the hint text under each checkbox/slider) can
     // report a stale, too-small heightForWidth() on the very first layout
@@ -257,6 +373,12 @@ void SettingsDialog::onSendButtonStyleComboChanged(int index)
     const QString style = m_sendButtonStyleCombo->itemData(index).toString();
     QSettings().setValue("chat/sendButtonStyle", style);
     emit sendButtonStyleChanged(style);
+}
+
+void SettingsDialog::onSendButtonFilledToggled(bool filled)
+{
+    QSettings().setValue("chat/sendButtonFilled", filled);
+    emit sendButtonFilledChanged(filled);
 }
 
 void SettingsDialog::onContextLengthEnabledToggled(bool enabled)
@@ -423,4 +545,226 @@ void SettingsDialog::rebuildLoadedModelsList(const QVector<LoadedModelInfo> &mod
 
         m_loadedModelsLayout->addWidget(row);
     }
+}
+
+void SettingsDialog::refreshWhisperStatusLabel()
+{
+    if (!m_whisperManager)
+        return;
+
+    if (!m_whisperManager->isBinaryAvailable()) {
+        m_whisperStatusLabel->setText(
+            "whisper-cli not found — build whisper.cpp or point at an existing binary below.");
+        return;
+    }
+
+    const QString modelsDir = m_whisperManager->modelsDir().isEmpty()
+        ? "(not set yet — pick one, or download a model to create a default)"
+        : m_whisperManager->modelsDir();
+    m_whisperStatusLabel->setText(
+        QString("Binary: %1\nModels folder: %2")
+            .arg(m_whisperManager->binaryPath(), modelsDir));
+}
+
+void SettingsDialog::rebuildWhisperModelsTable()
+{
+    if (!m_whisperManager)
+        return;
+
+    m_whisperModelsTable->setRowCount(0);
+    m_whisperProgressBars.clear();
+
+    const QStringList installed = m_whisperManager->installedModels();
+    const QString selected = m_whisperManager->selectedModel();
+    const QVector<WhisperModelInfo> catalog = WhisperManager::catalog();
+
+    // Minimal (default) view keeps just the columns someone picking a model
+    // actually decides on; disk size/memory/language/usage — everything
+    // else in the catalog — move into each row's tooltip instead. Expanded
+    // shows every column at once, tooltip included, for anyone who wants it
+    // all visible without hovering.
+    const QStringList headers = m_whisperTableExpanded
+        ? QStringList{"Model", "Disk", "Memory", "Language", "Speed", "Accuracy", ""}
+        : QStringList{"Model", "Speed", "Accuracy", ""};
+    m_whisperModelsTable->setColumnCount(headers.size());
+    m_whisperModelsTable->setHorizontalHeaderLabels(headers);
+    const int actionColumn = headers.size() - 1;
+    if (m_whisperTableExpanded) {
+        // Every column sized to its own contents, with none stretched to
+        // soak up leftover width — the point is to let the row's true total
+        // width exceed the viewport when it doesn't fit, so the horizontal
+        // scrollbar set up above actually has something to do instead of
+        // Stretch quietly shrinking column 0 to make everything fit anyway.
+        for (int column = 0; column < headers.size(); ++column)
+            m_whisperModelsTable->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    } else {
+        // Minimal view's few columns comfortably fit any reasonable dialog
+        // width, so column 0 stretching to fill it looks better than a
+        // sliver of empty space after Accuracy/action.
+        m_whisperModelsTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        m_whisperModelsTable->horizontalHeader()->setSectionResizeMode(actionColumn, QHeaderView::ResizeToContents);
+    }
+
+    auto *selectionGroup = new QButtonGroup(m_whisperModelsTable);
+
+    for (const WhisperModelInfo &info : catalog) {
+        const int row = m_whisperModelsTable->rowCount();
+        m_whisperModelsTable->insertRow(row);
+
+        const QString tooltip = QString(
+            "Disk: %1\nMemory: ~%2\nLanguage: %3\nUsage: %4")
+            .arg(info.diskSize, info.memEstimate, info.language, info.usage);
+
+        auto setPlainCell = [this, row, &tooltip](int column, const QString &text, bool center = true) {
+            auto *item = new QTableWidgetItem(text);
+            item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+            if (center)
+                item->setTextAlignment(Qt::AlignCenter);
+            item->setToolTip(tooltip);
+            m_whisperModelsTable->setItem(row, column, item);
+        };
+
+        int column = 0;
+        setPlainCell(column++, info.id, false);
+        if (m_whisperTableExpanded) {
+            setPlainCell(column++, info.diskSize);
+            setPlainCell(column++, info.memEstimate);
+            setPlainCell(column++, info.language);
+        }
+        setPlainCell(column++, info.speed);
+        setPlainCell(column++, info.accuracy);
+
+        const bool isInstalled = installed.contains(info.id);
+        const bool isDownloading = m_whisperManager->isDownloading(info.id);
+
+        auto *actionCell = new QWidget;
+        actionCell->setToolTip(tooltip);
+        auto *actionLayout = new QHBoxLayout(actionCell);
+        actionLayout->setContentsMargins(4, 0, 4, 0);
+
+        if (isDownloading) {
+            auto *progress = new QProgressBar;
+            progress->setRange(0, 0); // indeterminate until the first progress signal gives a real total
+            progress->setFixedWidth(80);
+            actionLayout->addWidget(progress);
+            m_whisperProgressBars.insert(info.id, progress);
+        } else if (isInstalled) {
+            auto *radio = new QRadioButton("Use");
+            radio->setChecked(info.id == selected);
+            selectionGroup->addButton(radio);
+            connect(radio, &QRadioButton::toggled, this, [this, id = info.id](bool checked) {
+                if (checked)
+                    m_whisperManager->setSelectedModel(id);
+            });
+            actionLayout->addWidget(radio);
+        } else {
+            auto *downloadButton = new QPushButton("Download");
+            connect(downloadButton, &QPushButton::clicked, this, [this, id = info.id]() {
+                m_whisperManager->downloadModel(id);
+                rebuildWhisperModelsTable();
+            });
+            actionLayout->addWidget(downloadButton);
+        }
+
+        m_whisperModelsTable->setCellWidget(row, actionColumn, actionCell);
+    }
+}
+
+void SettingsDialog::updateWhisperExpandIcon()
+{
+    const bool dark = m_themeManager && m_themeManager->isDarkActive();
+    m_whisperExpandButton->setIcon(Theme::loadThemedIcon(
+        m_whisperTableExpanded ? ":/icons/contract.svg" : ":/icons/expand.svg", dark, 14, "secondaryText"));
+    m_whisperExpandButton->setToolTip(m_whisperTableExpanded ? "Show fewer columns" : "Show all columns");
+}
+
+void SettingsDialog::onWhisperExpandToggleClicked()
+{
+    m_whisperTableExpanded = !m_whisperTableExpanded;
+    updateWhisperExpandIcon();
+    rebuildWhisperModelsTable();
+}
+
+void SettingsDialog::onWhisperModelsChanged()
+{
+    refreshWhisperStatusLabel();
+    rebuildWhisperModelsTable();
+}
+
+void SettingsDialog::onWhisperDownloadProgress(const QString &modelId, qint64 received, qint64 total)
+{
+    QProgressBar *bar = m_whisperProgressBars.value(modelId);
+    if (!bar)
+        return;
+    if (total > 0) {
+        bar->setRange(0, 100);
+        bar->setValue(static_cast<int>((received * 100) / total));
+    }
+}
+
+void SettingsDialog::onWhisperDownloadFinished(const QString &modelId, bool success, const QString &error)
+{
+    if (!success) {
+        m_whisperStatusLabel->setText("Download of \"" + modelId + "\" failed: " + error);
+        rebuildWhisperModelsTable();
+    }
+    // On success, modelsChanged() (emitted by WhisperManager right after
+    // this) already triggers onWhisperModelsChanged(), which rebuilds the
+    // table — no separate rebuild needed here to avoid doing it twice.
+}
+
+void SettingsDialog::onChangeWhisperBinaryClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Select whisper-cli binary", QDir::homePath());
+    if (path.isEmpty())
+        return;
+    m_whisperManager->setBinaryPath(path);
+    refreshWhisperStatusLabel();
+    rebuildWhisperModelsTable();
+}
+
+void SettingsDialog::onChangeWhisperModelsDirClicked()
+{
+    const QString path = QFileDialog::getExistingDirectory(
+        this, "Select Whisper models folder", QDir::homePath());
+    if (path.isEmpty())
+        return;
+    m_whisperManager->setModelsDir(path);
+    refreshWhisperStatusLabel();
+    rebuildWhisperModelsTable();
+}
+
+void SettingsDialog::refreshAudioInputCombo()
+{
+    const QByteArray savedId = QSettings().value("voice/audioInputDeviceId").toByteArray();
+
+    // Blocked while repopulating — clearing and re-adding items fires
+    // currentIndexChanged() for every step otherwise, which would each
+    // persist a spurious selection before the real (saved) one is restored
+    // below.
+    const QSignalBlocker blocker(m_audioInputCombo);
+
+    m_audioInputCombo->clear();
+    m_audioInputCombo->addItem("System default", QByteArray());
+
+    const QList<QAudioDevice> devices = QMediaDevices::audioInputs();
+    int matchIndex = 0;
+    for (const QAudioDevice &device : devices) {
+        m_audioInputCombo->addItem(device.description(), device.id());
+        if (!savedId.isEmpty() && device.id() == savedId)
+            matchIndex = m_audioInputCombo->count() - 1;
+    }
+
+    m_audioInputCombo->setCurrentIndex(matchIndex);
+}
+
+void SettingsDialog::onAudioInputComboChanged(int index)
+{
+    const QByteArray deviceId = m_audioInputCombo->itemData(index).toByteArray();
+    if (deviceId.isEmpty())
+        QSettings().remove("voice/audioInputDeviceId"); // "System default"
+    else
+        QSettings().setValue("voice/audioInputDeviceId", deviceId);
+    emit audioInputDeviceChanged();
 }

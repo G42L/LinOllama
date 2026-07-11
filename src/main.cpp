@@ -11,6 +11,7 @@
 #include "ServerController.h"
 #include "ConversationStore.h"
 #include "ThemeManager.h"
+#include "WhisperManager.h"
 #include "Theme.h"
 
 int main(int argc, char *argv[])
@@ -75,8 +76,9 @@ int main(int argc, char *argv[])
     OllamaClient ollamaClient;
     ServerController serverController;
     ConversationStore conversationStore;
+    WhisperManager whisperManager;
 
-    MainWindow mainWindow(&systemMonitor, &ollamaClient, &conversationStore, &themeManager);
+    MainWindow mainWindow(&systemMonitor, &ollamaClient, &conversationStore, &themeManager, &whisperManager);
     TrayApplication trayApp(&systemMonitor, &ollamaClient, &serverController, &mainWindow, &themeManager);
     mainWindow.show();
 
