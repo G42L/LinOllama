@@ -22,6 +22,19 @@ int main(int argc, char *argv[])
     // even on the vast majority of runs that never touch a map block.
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts, true);
 
+    // Chromium's own GPU process can fail outright on some setups even when
+    // a real GPU is present — seen as repeated "eglCreateContext failed
+    // with error EGL_BAD_CONTEXT" / "SharedImageStub: unable to create
+    // context" in the log, most likely a Wayland/EGL platform mismatch
+    // inside Chromium itself rather than anything this app controls. None
+    // of what actually gets rendered here (basic HTML/CSS, 2D <canvas>
+    // charts, map tiles) needs GPU acceleration, so disabling it outright
+    // avoids the failure entirely instead of hoping Chromium's software
+    // fallback recovers cleanly on its own. Must be set before
+    // QApplication — Chromium reads its command-line flags when the
+    // WebEngine subsystem first initializes.
+    qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu");
+
     QApplication app(argc, argv);
 
     // Needed before any QSettings use (ThemeManager persists the theme

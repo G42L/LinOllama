@@ -549,6 +549,32 @@ void ChatWidget::renderConversation()
         reconnectStreamingBubble();
 }
 
+QString ChatWidget::livePreviewText(const QString &buffer)
+{
+    // Complete ```html ... ``` blocks — collapsed to a placeholder wherever
+    // they appear (a reply can have text before/after one).
+    static const QRegularExpression completeHtmlFence(
+        QStringLiteral("```html\\s*\\n.*?```"),
+        QRegularExpression::DotMatchesEverythingOption);
+    static const QString placeholder = QStringLiteral("\n\n*(rendering HTML once the reply finishes…)*\n\n");
+
+    QString preview = buffer;
+    preview.replace(completeHtmlFence, placeholder);
+
+    // Whatever's left of a still-open ```html fence (the model hasn't typed
+    // its closing ``` yet) — since every *complete* one was already replaced
+    // above, any "```html" still present has to be one of these. Everything
+    // from that point on is inside it, so it's dropped entirely rather than
+    // streamed token-by-token as raw HTML/CSS/JS source text.
+    const int openIdx = preview.indexOf(QStringLiteral("```html"));
+    if (openIdx >= 0) {
+        preview.truncate(openIdx);
+        preview += placeholder;
+    }
+
+    return preview;
+}
+
 void ChatWidget::reconnectStreamingBubble()
 {
     StreamState &st = m_streams[m_activeConversationId];
@@ -562,7 +588,7 @@ void ChatWidget::reconnectStreamingBubble()
         m_streamingBubbleLayout->insertWidget(0, m_streamingThinkingWidget); // above the answer text
     }
     if (!st.buffer.isEmpty())
-        m_streamingBrowser->setMarkdownWithHtmlBlocks(st.buffer);
+        m_streamingBrowser->setMarkdownWithHtmlBlocks(livePreviewText(st.buffer));
     else if (m_chatQueue->isQueued(m_activeConversationId))
         onQueuePositionChanged(m_activeConversationId, m_chatQueue->aheadCount(m_activeConversationId));
 }
@@ -1213,7 +1239,7 @@ void ChatWidget::onChatDelta(const QString &conversationId, const QString &token
         return;
 
     if (m_streamingBrowser)
-        m_streamingBrowser->setMarkdownWithHtmlBlocks(st.buffer);
+        m_streamingBrowser->setMarkdownWithHtmlBlocks(livePreviewText(st.buffer));
     scrollToBottom();
     updateContextUsageDisplay();
 }

@@ -203,6 +203,18 @@ private:
     // tokens keep landing in it. Called from renderConversation() only when
     // that condition holds; a normal (no live stream) render never calls this.
     void reconnectStreamingBubble();
+    // Live-streaming equivalent of a ```html block: rather than actually
+    // re-parsing it as HTML on every single token (setMarkdownWithHtmlBlocks()
+    // calls QTextDocument::setHtml() on the *whole* accumulated buffer each
+    // time — for a large/growing html block, especially one with a lot of
+    // inline CSS/JS like a Chart.js snippet, that's real, repeated parsing
+    // work on an ever-larger string every token, which is what made the UI
+    // visibly bog down while such a reply was still generating), any
+    // ```html block — complete or still being typed out — is swapped for a
+    // short placeholder line here. The real block only actually gets
+    // rendered (as a proper HtmlEmbedWidget — see renderAssistantContent())
+    // once the reply is done and the buffer stops changing every token.
+    static QString livePreviewText(const QString &buffer);
     void clearMessages();
     // Appends a message row (a rounded "bubble") to the list and returns the
     // browser widget holding its text, so streaming can keep updating it in
