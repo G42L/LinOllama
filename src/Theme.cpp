@@ -176,8 +176,8 @@ QComboBox::down-arrow {
     /* A solid filled triangle, not an outlined chevron — matches Fusion's
        own filled menu-indicator glyph on #toolsButton right next to it. */
     image: url(:/icons/dropdown-arrow.svg);
-    width: 10px;
-    height: 6px;
+    width: 8px;
+    height: 5px;
 }
 
 QComboBox QAbstractItemView {
