@@ -49,6 +49,13 @@ public:
     // ChatWidget::refreshAudioInputDevice()).
     void refreshAudioInputDevice();
 
+    // Re-reads "voice/meterSmoothingPercent" from QSettings (0..100, default
+    // 50) and re-derives m_attackRate/m_releaseRate from it — see their own
+    // comment for the mapping. Called once at construction and again live
+    // whenever SettingsDialog's meter-smoothing slider changes (see
+    // ChatWidget::refreshMeterSmoothing()).
+    void refreshMeterSmoothing();
+
 signals:
     // filePath is a temp .wav file the receiver owns (delete it once done).
     void recordingFinished(const QString &filePath);
@@ -92,4 +99,14 @@ private:
     // back down, so the meter has visible inertia instead of jittering with
     // every buffer. Reset at the start of every recording.
     qreal m_smoothedLevel = 0.0;
+
+    // How much of the gap to the new peak gets closed per buffer — 1.0
+    // would snap instantly (no smoothing at all), smaller values ease
+    // toward it more gradually. Attack (rising) is always kept faster than
+    // release (falling) so the meter still feels responsive to a sudden
+    // louder sound; both are scaled together by the same Settings slider —
+    // see refreshMeterSmoothing(). Defaults (0.6/0.15) match this feature's
+    // original hardcoded values, at the slider's default (50%) position.
+    qreal m_attackRate = 0.6;
+    qreal m_releaseRate = 0.15;
 };

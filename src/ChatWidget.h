@@ -100,6 +100,11 @@ public:
     // refreshContextLengthSetting() above.
     void refreshAudioInputDevice();
 
+    // Re-applies the "voice/meterSmoothingPercent" QSettings value to the
+    // recorder — see VoiceRecorder::refreshMeterSmoothing(). Called live
+    // when SettingsDialog's meter-smoothing slider changes.
+    void refreshMeterSmoothing();
+
 protected:
     // Watches two unrelated children, both for things QSS/layouts can't
     // express directly:

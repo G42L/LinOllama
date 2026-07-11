@@ -285,22 +285,25 @@ QProgressBar#contextUsageProgress[nearLimit="true"]::chunk {
     background-color: {{danger}};
 }
 
-/* Settings' context-length slider — filled portion and handle both use
-   {{accent}}, so they follow a custom "Application" color the same way the
-   progress bars above do. */
-QSlider#contextLengthSlider::groove:horizontal {
+/* Settings' context-length and meter-smoothing sliders — filled portion and
+   handle both use {{accent}}, so they follow a custom "Application" color
+   the same way the progress bars above do. */
+QSlider#contextLengthSlider::groove:horizontal,
+QSlider#meterSmoothingSlider::groove:horizontal {
     background-color: {{progressTrack}};
     height: 6px;
     border-radius: 3px;
 }
 
-QSlider#contextLengthSlider::sub-page:horizontal {
+QSlider#contextLengthSlider::sub-page:horizontal,
+QSlider#meterSmoothingSlider::sub-page:horizontal {
     background-color: {{accent}};
     height: 6px;
     border-radius: 3px;
 }
 
-QSlider#contextLengthSlider::handle:horizontal {
+QSlider#contextLengthSlider::handle:horizontal,
+QSlider#meterSmoothingSlider::handle:horizontal {
     background-color: {{accent}};
     width: 14px;
     height: 14px;

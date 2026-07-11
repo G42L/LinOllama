@@ -82,6 +82,12 @@ signals:
     // by the time this fires.
     void audioInputDeviceChanged();
 
+    // Emitted whenever the meter-smoothing slider changes — ChatWidget
+    // listens live and forwards it straight to VoiceRecorder::
+    // refreshMeterSmoothing(). Persistence to QSettings
+    // ("voice/meterSmoothingPercent") already happened by the time this fires.
+    void meterSmoothingChanged();
+
 private slots:
     void onThemeComboChanged(int index);
     void onSendButtonStyleComboChanged(int index);
@@ -103,6 +109,7 @@ private slots:
 
     void onAudioInputComboChanged(int index);
     void refreshAudioInputCombo();
+    void onMeterSmoothingSliderChanged(int value);
 
     // Persist straight to QSettings ("ollamaServer/*") — no live signal out
     // of SettingsDialog, since these only take effect the next time
@@ -210,6 +217,14 @@ private:
     // pins push-to-talk recording to it via "voice/audioInputDeviceId" in
     // QSettings, regardless of what the OS considers default afterward.
     QComboBox *m_audioInputCombo = nullptr;
+
+    // "Meter smoothing" slider (0..100, default 50) — see VoiceRecorder::
+    // refreshMeterSmoothing() for how this maps to actual attack/release
+    // rates. m_meterSmoothingValueLabel shows "Sharper"/"Default"/"Smoother"
+    // rather than a bare number, since the raw 0-100 scale isn't meaningful
+    // on its own.
+    QSlider *m_meterSmoothingSlider = nullptr;
+    QLabel *m_meterSmoothingValueLabel = nullptr;
 
     // Ollama tab's "Server environment" group — see the onOllama*() slots.
     QLineEdit *m_ollamaModelsPathEdit = nullptr;

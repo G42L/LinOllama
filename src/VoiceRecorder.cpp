@@ -124,6 +124,7 @@ QVector<float> resampleLinear(const QVector<float> &samples, int srcRate, int ds
 VoiceRecorder::VoiceRecorder(QObject *parent) : QObject(parent)
 {
     refreshAudioInputDevice();
+    refreshMeterSmoothing();
 }
 
 void VoiceRecorder::refreshAudioInputDevice()
@@ -147,6 +148,20 @@ void VoiceRecorder::refreshAudioInputDevice()
         chosen = QMediaDevices::defaultAudioInput();
 
     m_device = chosen;
+}
+
+void VoiceRecorder::refreshMeterSmoothing()
+{
+    const int percent = qBound(0, QSettings().value("voice/meterSmoothingPercent", 50).toInt(), 100);
+
+    // Linear from each rate's "sharp" end (percent=0) to its "smooth" end
+    // (percent=100), passing exactly through the original hardcoded values
+    // (0.6/0.15) at percent=50 — so the slider's default position reproduces
+    // this feature's behavior before the setting existed, sharper to the
+    // left of center and smoother to the right.
+    const qreal t = (50 - percent) / 50.0; // +1.0 at 0%, 0.0 at 50%, -1.0 at 100%
+    m_attackRate = qBound(0.05, 0.6 + t * 0.3, 0.95);
+    m_releaseRate = qBound(0.02, 0.15 + t * 0.13, 0.5);
 }
 
 QString VoiceRecorder::pickOutputDir()
@@ -260,8 +275,9 @@ void VoiceRecorder::onCaptureReadyRead()
         peak = qMax(peak, static_cast<qreal>(qAbs(sample)));
     peak = qBound(0.0, peak, 1.0);
 
-    // Fast attack, slow release — see the member's own comment.
-    const qreal rate = (peak > m_smoothedLevel) ? 0.6 : 0.15;
+    // Fast attack, slow release — see m_attackRate/m_releaseRate's own
+    // comment (adjustable via Settings' meter-smoothing slider).
+    const qreal rate = (peak > m_smoothedLevel) ? m_attackRate : m_releaseRate;
     m_smoothedLevel += (peak - m_smoothedLevel) * rate;
 
     emit audioLevelChanged(m_smoothedLevel);

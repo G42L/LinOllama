@@ -377,6 +377,11 @@ void ChatWidget::refreshAudioInputDevice()
     m_voiceRecorder.refreshAudioInputDevice();
 }
 
+void ChatWidget::refreshMeterSmoothing()
+{
+    m_voiceRecorder.refreshMeterSmoothing();
+}
+
 void ChatWidget::setActiveConversation(const QString &conversationId)
 {
     // Switching conversations no longer touches any in-flight stream — a

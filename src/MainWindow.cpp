@@ -228,6 +228,8 @@ void MainWindow::onSettingsRequested()
             m_chatWidget, &ChatWidget::setModelOptimizationEnabled);
     connect(&dialog, &SettingsDialog::audioInputDeviceChanged,
             m_chatWidget, &ChatWidget::refreshAudioInputDevice);
+    connect(&dialog, &SettingsDialog::meterSmoothingChanged,
+            m_chatWidget, &ChatWidget::refreshMeterSmoothing);
     dialog.exec();
 }
 

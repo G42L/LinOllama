@@ -283,19 +283,48 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     // --- Inputs tab: Microphone ----------------------------------------------
     auto *micGroup = new QGroupBox("Microphone");
-    auto *micLayout = new QHBoxLayout(micGroup);
+    auto *micGroupLayout = new QVBoxLayout(micGroup);
 
-    micLayout->addWidget(new QLabel("Audio input"));
+    auto *micDeviceRow = new QHBoxLayout;
+    micDeviceRow->addWidget(new QLabel("Audio input"));
     m_audioInputCombo = new QComboBox;
-    micLayout->addWidget(m_audioInputCombo, /*stretch=*/1);
+    micDeviceRow->addWidget(m_audioInputCombo, /*stretch=*/1);
 
     auto *micRefreshButton = new QPushButton("Refresh");
     connect(micRefreshButton, &QPushButton::clicked, this, &SettingsDialog::refreshAudioInputCombo);
-    micLayout->addWidget(micRefreshButton);
+    micDeviceRow->addWidget(micRefreshButton);
+    micGroupLayout->addLayout(micDeviceRow);
 
     refreshAudioInputCombo();
     connect(m_audioInputCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &SettingsDialog::onAudioInputComboChanged);
+
+    auto *meterSmoothingRow = new QHBoxLayout;
+    meterSmoothingRow->addWidget(new QLabel("Meter smoothing"));
+    m_meterSmoothingSlider = new QSlider(Qt::Horizontal);
+    m_meterSmoothingSlider->setObjectName("meterSmoothingSlider"); // picks up Theme.cpp's accent-colored handle/fill, same as the context-length slider
+    m_meterSmoothingSlider->setRange(0, 100);
+    m_meterSmoothingSlider->setValue(QSettings().value("voice/meterSmoothingPercent", 50).toInt());
+    meterSmoothingRow->addWidget(m_meterSmoothingSlider, /*stretch=*/1);
+    m_meterSmoothingValueLabel = new QLabel;
+    m_meterSmoothingValueLabel->setMinimumWidth(56); // stops the row from jittering width as the text changes
+    meterSmoothingRow->addWidget(m_meterSmoothingValueLabel);
+    micGroupLayout->addLayout(meterSmoothingRow);
+    connect(m_meterSmoothingSlider, &QSlider::valueChanged,
+            this, &SettingsDialog::onMeterSmoothingSliderChanged);
+    // Sets the initial label text (re-persisting the just-loaded value is
+    // harmless, and nothing's connected to meterSmoothingChanged() yet at
+    // this point in construction anyway).
+    onMeterSmoothingSliderChanged(m_meterSmoothingSlider->value());
+
+    auto *meterSmoothingHint = new QLabel(
+        "How quickly the live \"Mic\" meter (in the system stats strip) responds to changes in "
+        "volume — lower reacts instantly but can look jumpy; higher eases between levels more "
+        "gradually, avoiding sharp jumps at the cost of a slight lag. Only affects the meter's "
+        "display, not the actual recording.");
+    meterSmoothingHint->setWordWrap(true);
+    meterSmoothingHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    micGroupLayout->addWidget(meterSmoothingHint);
 
     inputsPageLayout->addWidget(micGroup);
     inputsPageLayout->addStretch();
@@ -857,6 +886,22 @@ void SettingsDialog::onAudioInputComboChanged(int index)
     else
         QSettings().setValue("voice/audioInputDeviceId", deviceId);
     emit audioInputDeviceChanged();
+}
+
+void SettingsDialog::onMeterSmoothingSliderChanged(int value)
+{
+    QSettings().setValue("voice/meterSmoothingPercent", value);
+
+    QString text;
+    if (value < 40)
+        text = "Sharper";
+    else if (value > 60)
+        text = "Smoother";
+    else
+        text = "Default";
+    m_meterSmoothingValueLabel->setText(text);
+
+    emit meterSmoothingChanged();
 }
 
 void SettingsDialog::onOllamaModelsPathEdited()
