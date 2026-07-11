@@ -1,0 +1,1530 @@
+#include "ChatWidget.h"
+#include "ThinkingSectionWidget.h"
+#include "ThemeManager.h"
+#include "Theme.h"
+
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QFrame>
+#include <QScrollBar>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QRegularExpression>
+#include <QTimer>
+#include <QStyle>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFile>
+#include <QEvent>
+#include <QMenu>
+#include <QSettings>
+#include <QPlainTextEdit>
+#include <QTextCursor>
+#include <QMessageBox>
+
+ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
+                       QWidget *parent)
+    : QWidget(parent)
+    , m_ollamaClient(ollamaClient)
+    , m_store(store)
+    , m_themeManager(themeManager)
+{
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+
+    // --- Message list ------------------------------------------------------
+    m_scrollArea = new QScrollArea;
+    m_scrollArea->setObjectName("messageScrollArea");
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setFrameShape(QFrame::NoFrame);
+    // Scrolling itself (wheel, drag, scrollToBottom()) still works exactly
+    // as before — this only hides the bar's own track/handle, for a
+    // cleaner, more Claude-Desktop-like look than a visible scrollbar.
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    m_messagesContainer = new QWidget;
+    m_messagesContainer->setObjectName("messagesContainer");
+    m_messagesLayout = new QVBoxLayout(m_messagesContainer);
+    m_messagesLayout->setContentsMargins(20, 16, 20, 16);
+    m_messagesLayout->setSpacing(12);
+    m_messagesLayout->addStretch(1); // keeps bubbles pinned to the top until there are enough to scroll
+
+    m_scrollArea->setWidget(m_messagesContainer);
+    layout->addWidget(m_scrollArea, /*stretch=*/1);
+
+    // --- Empty state: centered intro + the same input bar docked in -------
+    // (see dockInputBar()) rather than a plain "select a conversation"
+    // label filling the whole pane.
+    m_emptyStatePanel = new QWidget;
+    m_emptyStatePanel->setObjectName("emptyStatePanel");
+    // Watched for QEvent::Resize in eventFilter() so the docked input card's
+    // width tracks the panel (80%) instead of a fixed pixel cap.
+    m_emptyStatePanel->installEventFilter(this);
+    auto *emptyStateLayout = new QVBoxLayout(m_emptyStatePanel);
+    emptyStateLayout->setContentsMargins(40, 0, 40, 0);
+    emptyStateLayout->addStretch(1);
+
+    auto *emptyStateTitle = new QLabel("Chat with your local models");
+    emptyStateTitle->setObjectName("emptyStateTitle");
+    emptyStateTitle->setAlignment(Qt::AlignHCenter);
+    emptyStateTitle->setWordWrap(true);
+    emptyStateLayout->addWidget(emptyStateTitle);
+
+    auto *emptyStateSubtitle = new QLabel("Pick a model and send a message to get started.");
+    emptyStateSubtitle->setObjectName("emptyStateSubtitle");
+    emptyStateSubtitle->setAlignment(Qt::AlignHCenter);
+    emptyStateSubtitle->setWordWrap(true);
+    emptyStateLayout->addWidget(emptyStateSubtitle);
+
+    auto *emptyStateInputDock = new QWidget;
+    m_emptyStateInputDockLayout = new QHBoxLayout(emptyStateInputDock);
+    m_emptyStateInputDockLayout->setContentsMargins(0, 20, 0, 0);
+    m_emptyStateInputDockLayout->addStretch(1);
+    m_emptyStateInputDockLayout->addStretch(1); // m_inputBar is inserted between these two (index 1) by dockInputBar()
+    emptyStateLayout->addWidget(emptyStateInputDock);
+
+    emptyStateLayout->addStretch(2);
+
+    layout->addWidget(m_emptyStatePanel, /*stretch=*/1);
+
+    // --- Context usage strip -------------------------------------------
+    m_contextUsageBar = new QWidget;
+    m_contextUsageBar->setObjectName("contextUsageBar");
+    auto *usageLayout = new QHBoxLayout(m_contextUsageBar);
+    usageLayout->setContentsMargins(20, 6, 20, 6);
+    usageLayout->setSpacing(10);
+
+    // Jumps straight to any past question instead of scrolling through the
+    // whole history — see onJumpToClicked()/m_userMessageMarkers.
+    m_jumpToButton = new QToolButton;
+    m_jumpToButton->setObjectName("jumpToButton");
+    m_jumpToButton->setText("Jump to...");
+    m_jumpToButton->setCursor(Qt::PointingHandCursor);
+    m_jumpToButton->setAutoRaise(true);
+    connect(m_jumpToButton, &QToolButton::clicked, this, &ChatWidget::onJumpToClicked);
+    usageLayout->addWidget(m_jumpToButton);
+
+    m_contextUsageProgress = new QProgressBar;
+    m_contextUsageProgress->setObjectName("contextUsageProgress");
+    m_contextUsageProgress->setRange(0, 100);
+    m_contextUsageProgress->setValue(0);
+    m_contextUsageProgress->setTextVisible(false);
+    m_contextUsageProgress->setFixedHeight(6);
+    usageLayout->addWidget(m_contextUsageProgress, /*stretch=*/1);
+
+    m_contextUsageLabel = new QLabel("Context: —");
+    m_contextUsageLabel->setObjectName("contextUsageLabel");
+    usageLayout->addWidget(m_contextUsageLabel);
+
+    layout->addWidget(m_contextUsageBar);
+
+    // --- Bottom input dock (active conversation) ----------------------------
+    // The other endpoint of dockInputBar()'s swap — empty while no
+    // conversation is active, since m_inputBar lives in the empty-state
+    // panel's dock instead (see setActiveConversation()).
+    auto *bottomInputDock = new QWidget;
+    m_bottomInputDockLayout = new QVBoxLayout(bottomInputDock);
+    m_bottomInputDockLayout->setContentsMargins(0, 0, 0, 0);
+    layout->addWidget(bottomInputDock);
+
+    // --- Input bar: one rounded card holding chips + textarea + toolbar ----
+    // (Claude-Desktop-style: text on top, attach/model/send in a bottom row
+    // inside the same card, rather than everything side-by-side in a strip.)
+    m_inputBar = new QWidget;
+    m_inputBar->setObjectName("inputBar");
+    auto *inputOuterLayout = new QVBoxLayout(m_inputBar);
+    inputOuterLayout->setContentsMargins(16, 10, 16, 14);
+
+    m_inputCard = new QFrame;
+    m_inputCard->setObjectName("inputCard");
+    auto *cardLayout = new QVBoxLayout(m_inputCard);
+    cardLayout->setContentsMargins(14, 10, 10, 8);
+    cardLayout->setSpacing(4);
+
+    // Queued-but-not-yet-sent file attachments, shown as removable chips
+    // above the textarea. Hidden entirely while empty.
+    m_attachmentsBar = new QWidget;
+    m_attachmentsBar->setObjectName("attachmentsBar");
+    m_attachmentsLayout = new QHBoxLayout(m_attachmentsBar);
+    m_attachmentsLayout->setContentsMargins(0, 0, 0, 4);
+    m_attachmentsLayout->setSpacing(6);
+    m_attachmentsLayout->addStretch(1); // chips insert before this, keeping them left-aligned
+    m_attachmentsBar->setVisible(false);
+    cardLayout->addWidget(m_attachmentsBar);
+
+    m_inputEdit = new ChatInputEdit;
+    m_inputEdit->setObjectName("messageInput");
+    m_inputEdit->setPlaceholderText("How can I help you today?");
+    connect(m_inputEdit, &ChatInputEdit::submitRequested, this, &ChatWidget::onSendClicked);
+    // The card (not the textarea) draws the focus ring, since the border
+    // now belongs to the outer frame — see eventFilter().
+    m_inputEdit->installEventFilter(this);
+    cardLayout->addWidget(m_inputEdit);
+
+    auto *toolRow = new QWidget;
+    auto *toolLayout = new QHBoxLayout(toolRow);
+    toolLayout->setContentsMargins(0, 4, 0, 0);
+    toolLayout->setSpacing(8);
+
+    m_attachButton = new QToolButton;
+    m_attachButton->setObjectName("attachButton");
+    m_attachButton->setText("+");
+    m_attachButton->setToolTip("Attach files");
+    m_attachButton->setCursor(Qt::PointingHandCursor);
+    m_attachButton->setAutoRaise(true);
+    connect(m_attachButton, &QToolButton::clicked, this, &ChatWidget::onAttachClicked);
+    toolLayout->addWidget(m_attachButton);
+
+    // "Tools" dropdown: checkable Search-the-web / Thinking toggles. A
+    // persistent QMenu (built once, not per-click) since checked state has
+    // to survive being closed and reopened.
+    m_toolsButton = new QToolButton;
+    m_toolsButton->setObjectName("toolsButton");
+    m_toolsButton->setCursor(Qt::PointingHandCursor);
+    m_toolsButton->setAutoRaise(true);
+    m_toolsButton->setPopupMode(QToolButton::InstantPopup);
+
+    auto *toolsMenu = new QMenu(m_toolsButton);
+    m_webSearchAction = toolsMenu->addAction("Search the web");
+    m_webSearchAction->setCheckable(true);
+    m_webSearchAction->setChecked(m_webSearchEnabled);
+    connect(m_webSearchAction, &QAction::toggled, this, &ChatWidget::onWebSearchToggled);
+
+    m_thinkingAction = toolsMenu->addAction("Thinking");
+    m_thinkingAction->setCheckable(true);
+    m_thinkingAction->setChecked(m_thinkingEnabled);
+    connect(m_thinkingAction, &QAction::toggled, this, &ChatWidget::onThinkingToggled);
+
+    m_toolsButton->setMenu(toolsMenu);
+    toolLayout->addWidget(m_toolsButton);
+    updateToolsButtonAppearance(); // sets the initial "Tools" label
+
+    toolLayout->addStretch(1);
+
+    // No "Model:" label — the dropdown itself is self-explanatory once
+    // you've used it once. Styled flat/borderless (see Theme.cpp) to read
+    // as a toolbar item rather than a form control.
+    m_modelCombo = new QComboBox;
+    m_modelCombo->setObjectName("modelCombo");
+    m_modelCombo->setMinimumWidth(110);
+    m_modelCombo->setMaximumWidth(220);
+    connect(m_modelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ChatWidget::onModelComboChanged);
+    toolLayout->addWidget(m_modelCombo);
+
+    // Push-to-talk: pressed()/released() (not clicked()) so holding the
+    // button down brackets the recording, matching "hold press to record."
+    m_voiceButton = new QToolButton;
+    m_voiceButton->setObjectName("voiceButton");
+    m_voiceButton->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    m_voiceButton->setIconSize(QSize(16, 16));
+    m_voiceButton->setToolTip("Hold to record a voice message");
+    m_voiceButton->setCursor(Qt::PointingHandCursor);
+    m_voiceButton->setAutoRaise(true);
+    connect(m_voiceButton, &QToolButton::pressed, this, &ChatWidget::onVoicePressed);
+    connect(m_voiceButton, &QToolButton::released, this, &ChatWidget::onVoiceReleased);
+    toolLayout->addWidget(m_voiceButton);
+    connect(&m_voiceRecorder, &VoiceRecorder::recordingFinished, this, &ChatWidget::onVoiceRecordingFinished);
+    connect(&m_voiceRecorder, &VoiceRecorder::recordingFailed, this, &ChatWidget::onVoiceRecordingFailed);
+
+    m_sendButton = new QPushButton;
+    m_sendButton->setObjectName("sendButton");
+    m_sendButton->setIconSize(QSize(16, 16));
+    connect(m_sendButton, &QPushButton::clicked, this, &ChatWidget::onSendButtonClicked);
+    toolLayout->addWidget(m_sendButton);
+    // Restores whatever was last saved in Settings (see SettingsDialog's
+    // "Send button" combo) — defaults to the paper-plane icon.
+    setSendButtonStyle(QSettings().value("chat/sendButtonStyle", "plane").toString());
+
+    connect(&m_webSearchClient, &WebSearchClient::searchCompleted, this,
+            [this](const QString &query, const QString &resultsText) {
+                Q_UNUSED(query);
+                m_pendingUserMessage.webSearchContext = resultsText;
+                finalizeAndSendUserMessage(m_pendingUserMessage, m_pendingWasNewConversation);
+            });
+
+    cardLayout->addWidget(toolRow);
+
+    inputOuterLayout->addWidget(m_inputCard);
+
+    // m_inputBar isn't placed here — setActiveConversation() (called at the
+    // end of this constructor, starting in the empty state) docks it via
+    // dockInputBar() instead, so it lands in whichever slot matches the
+    // initial state.
+
+    connect(m_ollamaClient, &OllamaClient::chatDelta, this, &ChatWidget::onChatDelta);
+    connect(m_ollamaClient, &OllamaClient::chatThinkingDelta, this, &ChatWidget::onChatThinkingDelta);
+    connect(m_ollamaClient, &OllamaClient::chatDone, this, &ChatWidget::onChatDone);
+    connect(m_ollamaClient, &OllamaClient::chatError, this, &ChatWidget::onChatError);
+    connect(m_ollamaClient, &OllamaClient::chatUsage, this, &ChatWidget::onChatUsage);
+    connect(m_ollamaClient, &OllamaClient::modelContextLengthFetched,
+            this, &ChatWidget::onModelContextLengthFetched);
+
+    m_chatQueue = new ChatQueue(m_ollamaClient, this);
+    m_chatQueue->setOptimizeModelSwaps(QSettings().value("chat/modelOptimization", false).toBool());
+    connect(m_chatQueue, &ChatQueue::turnStarted, this, &ChatWidget::onQueueTurnStarted);
+    connect(m_chatQueue, &ChatQueue::queuePositionChanged, this, &ChatWidget::onQueuePositionChanged);
+
+    if (m_themeManager)
+        connect(m_themeManager, &ThemeManager::themeChanged, this, &ChatWidget::reloadThemedIcons);
+    reloadThemedIcons();
+
+    setActiveConversation(QString()); // start in the empty state
+}
+
+void ChatWidget::setAvailableModels(const QStringList &modelNames)
+{
+    const QString current = m_modelCombo->currentText();
+    m_modelCombo->blockSignals(true);
+    m_modelCombo->clear();
+    m_modelCombo->addItems(modelNames);
+    if (!current.isEmpty()) {
+        const int idx = m_modelCombo->findText(current);
+        if (idx >= 0)
+            m_modelCombo->setCurrentIndex(idx);
+    }
+    m_modelCombo->blockSignals(false);
+}
+
+void ChatWidget::setSendButtonStyle(const QString &style)
+{
+    m_sendButtonStyle = style;
+    const bool isArrow = (style == "arrow");
+    const bool isPlane = (style == "plane");
+
+    if (isPlane) {
+        m_sendButton->setText(QString());
+    } else if (isArrow) {
+        // U+2191 UPWARDS ARROW — a plain glyph, not an emoji, so it renders
+        // reliably everywhere (see ThinkingSectionWidget's spinner for why
+        // emoji specifically were dropped from this app after one didn't
+        // render on a real machine).
+        m_sendButton->setIcon(QIcon());
+        m_sendButton->setText(QString::fromUtf8("\xE2\x86\x91"));
+    } else { // "text"
+        m_sendButton->setIcon(QIcon());
+        m_sendButton->setText("Send");
+    }
+
+    // Drives Theme.cpp's QPushButton#sendButton[arrowStyle="true"]/
+    // [planeStyle="true"] rules — the pill shape and accent color still
+    // come from the base #sendButton rule either way.
+    m_sendButton->setProperty("arrowStyle", isArrow);
+    m_sendButton->setProperty("planeStyle", isPlane);
+    m_sendButton->style()->unpolish(m_sendButton);
+    m_sendButton->style()->polish(m_sendButton);
+
+    reloadSendButtonIcon();
+}
+
+void ChatWidget::refreshContextLengthSetting()
+{
+    updateContextUsageDisplay();
+}
+
+void ChatWidget::setModelOptimizationEnabled(bool enabled)
+{
+    m_chatQueue->setOptimizeModelSwaps(enabled);
+}
+
+void ChatWidget::setActiveConversation(const QString &conversationId)
+{
+    // Switching conversations no longer touches any in-flight stream — a
+    // reply keeps generating in the background (still landing in
+    // ConversationStore via onChatDelta()) even while a different
+    // conversation is shown. Only the *live widget pointers* are dropped
+    // here, since renderConversation() (below) is about to delete whatever
+    // bubbles currently exist in the shared message list anyway; the
+    // streaming data itself lives in m_streams, keyed by conversation, and
+    // survives the switch untouched.
+    m_streamingBrowser = nullptr;
+    m_streamingBubbleLayout = nullptr;
+    m_streamingThinkingWidget = nullptr;
+
+    // Files queued for the next message don't carry over to a different
+    // conversation you switch into.
+    m_pendingAttachments.clear();
+    rebuildAttachmentsBar();
+
+    m_activeConversationId = conversationId;
+
+    const bool hasConversation = !conversationId.isEmpty();
+    m_scrollArea->setVisible(hasConversation);
+    m_contextUsageBar->setVisible(hasConversation);
+    m_emptyStatePanel->setVisible(!hasConversation);
+    dockInputBar(!hasConversation);
+    // The input stays usable even with nothing selected — sending from the
+    // empty state auto-creates a conversation (see onSendClicked).
+    setInputEnabled(true);
+
+    if (!hasConversation) {
+        setSendButtonBusy(false);
+        return;
+    }
+
+    const Conversation *conv = m_store->find(conversationId);
+    if (!conv)
+        return;
+
+    if (!conv->model.isEmpty()) {
+        m_modelCombo->blockSignals(true);
+        const int idx = m_modelCombo->findText(conv->model);
+        if (idx >= 0)
+            m_modelCombo->setCurrentIndex(idx);
+        m_modelCombo->blockSignals(false);
+    }
+    // Once a conversation has messages, its model is locked in — Ollama
+    // has no notion of "switch models mid-chat" and doing so silently would
+    // just confuse whatever context the new model doesn't share.
+    m_modelCombo->setEnabled(conv->messages.isEmpty());
+
+    // Reconnects a live bubble automatically if this conversation still has
+    // a stream running in the background (see reconnectStreamingBubble()).
+    renderConversation();
+
+    // Reflects *this* conversation's own generation state — not whatever
+    // the previously-shown one left the send button/input showing.
+    const bool streaming = m_streams.contains(conversationId);
+    setSendButtonBusy(streaming);
+    setInputEnabled(!streaming);
+
+    if (!conv->model.isEmpty())
+        ensureContextLengthKnown(conv->model);
+    updateContextUsageDisplay();
+}
+
+void ChatWidget::dockInputBar(bool inEmptyState)
+{
+    // Reparenting a widget by adding it to a different layout doesn't
+    // automatically drop it from whichever layout held it before — that has
+    // to be done explicitly, or the old layout is left with a stale item.
+    // Both calls are safe no-ops if m_inputBar isn't currently in that layout.
+    m_bottomInputDockLayout->removeWidget(m_inputBar);
+    m_emptyStateInputDockLayout->removeWidget(m_inputBar);
+
+    if (inEmptyState) {
+        m_emptyStateInputDockLayout->insertWidget(1, m_inputBar); // between the dock's two stretches
+        // Sized immediately against the panel's current width, not just on
+        // the next resize — see updateEmptyStateInputWidth().
+        updateEmptyStateInputWidth();
+    } else {
+        m_inputBar->setMinimumWidth(0);
+        m_inputBar->setMaximumWidth(QWIDGETSIZE_MAX);
+        m_bottomInputDockLayout->addWidget(m_inputBar);
+    }
+}
+
+void ChatWidget::updateEmptyStateInputWidth()
+{
+    if (!m_activeConversationId.isEmpty())
+        return; // only the homepage composer is width-capped; the active-chat bar stays full width
+
+    // setFixedWidth, not setMaximumWidth: sitting between two stretch items
+    // in the dock's QHBoxLayout, m_inputBar's default (Preferred) size
+    // policy means it only ever claims its own sizeHint's worth of space —
+    // raising the *maximum* doesn't make a Preferred-policy widget actually
+    // grow to fill the extra room, since the stretches greedily absorb it
+    // first. A fixed width forces the exact target instead. Recomputed on
+    // every resize (see eventFilter()'s QEvent::Resize branch) so the card
+    // scales with the window rather than sticking to one size.
+    const int target = qMax(320, qRound(m_emptyStatePanel->width() * 0.8));
+    m_inputBar->setFixedWidth(target);
+}
+
+void ChatWidget::clearMessages()
+{
+    // Index 0 is always the earliest remaining message row while the
+    // trailing stretch (added once, in the constructor) sits last — so
+    // repeatedly popping the front leaves just the stretch behind.
+    while (m_messagesLayout->count() > 1) {
+        QLayoutItem *item = m_messagesLayout->takeAt(0);
+        if (item->widget())
+            item->widget()->deleteLater();
+        delete item;
+    }
+    // The rows just queued for deletion are what m_userMessageMarkers points
+    // at — clear it now (synchronously, before any stale pointer could be
+    // used) rather than waiting for the deferred deleteLater() to run.
+    m_userMessageMarkers.clear();
+}
+
+void ChatWidget::renderConversation()
+{
+    clearMessages();
+    const Conversation *conv = m_store->find(m_activeConversationId);
+    if (!conv)
+        return;
+
+    // If a background stream is still writing into this conversation, its
+    // reply renders as a *live* bubble instead of a static one — see
+    // reconnectStreamingBubble(). ConversationStore doesn't gain an
+    // assistant ChatMessage for it until the first *content* token arrives
+    // (see updateStreamingAssistantMessage(), only called from onChatDelta,
+    // never from onChatThinkingDelta) — so during the thinking-only phase,
+    // conv->messages still ends on the user's own message, with no
+    // assistant entry yet to anchor the live bubble to. That's handled
+    // after the loop below instead of inside it.
+    const bool hasLiveStream = m_streams.contains(m_activeConversationId);
+    const bool lastMessageIsLiveAssistant = hasLiveStream && !conv->messages.isEmpty()
+        && conv->messages.last().role == "assistant";
+    const int liveMessageIndex = lastMessageIsLiveAssistant ? conv->messages.size() - 1 : -1;
+
+    // Note: past "thinking" traces aren't persisted to disk (see
+    // Conversation.h / ChatMessage — there's no field for it), so reloading
+    // an old conversation shows only the final answers, with no thinking
+    // section above them. That's a deliberate scope call, not a bug: the
+    // trace is a live reasoning scratchpad, not part of the saved transcript.
+    // The in-progress stream's own thinking trace (if any) is still shown
+    // live via reconnectStreamingBubble(), which reads it from m_streams
+    // rather than from disk.
+    for (int i = 0; i < conv->messages.size(); ++i) {
+        if (i == liveMessageIndex) {
+            reconnectStreamingBubble();
+            continue;
+        }
+        const ChatMessage &msg = conv->messages[i];
+        appendMessageBubble(msg.role, msg.content, nullptr, msg.attachmentNames, i, msg.timestamp);
+    }
+
+    // Thinking-only phase: there's a live stream but no assistant message in
+    // the store yet to have matched inside the loop above, so the live
+    // bubble (empty answer text, possibly a thinking section) is appended
+    // here instead, as a new trailing row.
+    if (hasLiveStream && !lastMessageIsLiveAssistant)
+        reconnectStreamingBubble();
+}
+
+void ChatWidget::reconnectStreamingBubble()
+{
+    StreamState &st = m_streams[m_activeConversationId];
+
+    m_streamingBrowser = appendMessageBubble("assistant", QString(), &m_streamingBubbleLayout);
+    m_streamingThinkingWidget = nullptr;
+    if (!st.thinkingBuffer.isEmpty()) {
+        m_streamingThinkingWidget = new ThinkingSectionWidget;
+        m_streamingThinkingWidget->setThinking(st.isThinkingActive);
+        m_streamingThinkingWidget->appendThinkingText(st.thinkingBuffer);
+        m_streamingBubbleLayout->insertWidget(0, m_streamingThinkingWidget); // above the answer text
+    }
+    if (!st.buffer.isEmpty())
+        m_streamingBrowser->setMarkdownWithHtmlBlocks(st.buffer);
+    else if (m_chatQueue->isQueued(m_activeConversationId))
+        onQueuePositionChanged(m_activeConversationId, m_chatQueue->aheadCount(m_activeConversationId));
+}
+
+AutoHeightTextBrowser *ChatWidget::appendMessageBubble(const QString &role, const QString &content,
+                                                        QVBoxLayout **bubbleLayoutOut,
+                                                        const QStringList &attachmentNames,
+                                                        int messageIndex, const QDateTime &timestamp)
+{
+    const bool isUser = (role == "user");
+    const bool isError = (role == "error");
+
+    auto *row = new QWidget;
+    auto *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+
+    // No maximum width and no stretch on either side — bubbles fill the full
+    // width of the chat pane instead of being capped/aligned by role.
+    // Role is conveyed by background alone (see Theme.cpp): the user bubble
+    // keeps its fill color, the assistant bubble has none.
+    auto *bubble = new QFrame;
+    bubble->setObjectName(isError ? "errorBubble" : (isUser ? "userBubble" : "assistantBubble"));
+
+    auto *bubbleLayout = new QVBoxLayout(bubble);
+    bubbleLayout->setContentsMargins(14, 10, 14, 10);
+    bubbleLayout->setSpacing(4);
+    if (bubbleLayoutOut)
+        *bubbleLayoutOut = bubbleLayout;
+
+    if (!attachmentNames.isEmpty()) {
+        auto *attachmentsLabel = new QLabel("Attached: " + attachmentNames.join(", "));
+        attachmentsLabel->setObjectName("attachmentsSummaryLabel");
+        attachmentsLabel->setWordWrap(true);
+        bubbleLayout->addWidget(attachmentsLabel);
+    }
+
+    auto *browser = new AutoHeightTextBrowser;
+    browser->setObjectName("bubbleText");
+    if (isUser || isError) {
+        // Show the person's own text (and error messages) literally — no
+        // markdown interpretation of something they typed or a raw error string.
+        browser->setPlainText(content);
+        bubbleLayout->addWidget(browser);
+    } else {
+        bubbleLayout->addWidget(browser); // added before rendering so map widgets (see below) land after it
+        renderAssistantContent(browser, bubbleLayout, content);
+    }
+
+    // Inline editor — lives inside the bubble (replaces the text in place),
+    // hidden until "Edit" is clicked. Built here since it has to sit inside
+    // bubbleLayout, in the text's own spot; the button that reveals it
+    // lives in the separate actionsRow below (built next), so all the
+    // Edit/Cancel/Save wiring happens together once both exist.
+    QWidget *editContainer = nullptr;
+    QPlainTextEdit *editBox = nullptr;
+    QPushButton *cancelButton = nullptr;
+    QPushButton *saveButton = nullptr;
+    if (isUser && messageIndex >= 0) {
+        editContainer = new QWidget;
+        editContainer->setVisible(false);
+        auto *editContainerLayout = new QVBoxLayout(editContainer);
+        editContainerLayout->setContentsMargins(0, 6, 0, 0);
+        editContainerLayout->setSpacing(6);
+
+        editBox = new QPlainTextEdit(content);
+        editBox->setObjectName("messageEditBox");
+        editContainerLayout->addWidget(editBox);
+
+        auto *editButtonsRow = new QWidget;
+        auto *editButtonsLayout = new QHBoxLayout(editButtonsRow);
+        editButtonsLayout->setContentsMargins(0, 0, 0, 0);
+        editButtonsLayout->addStretch(1);
+        cancelButton = new QPushButton("Cancel");
+        saveButton = new QPushButton("Resend");
+        saveButton->setObjectName("editSaveButton");
+        editButtonsLayout->addWidget(cancelButton);
+        editButtonsLayout->addWidget(saveButton);
+        editContainerLayout->addWidget(editButtonsRow);
+
+        bubbleLayout->addWidget(editContainer);
+    }
+
+    rowLayout->addWidget(bubble, /*stretch=*/1);
+
+    // Timestamp + Edit/Retry: a separate row below the bubble (plain
+    // background, not the bubble's fill color) rather than inside it, so it
+    // sits between this prompt and whatever comes next — inserted into
+    // m_messagesLayout right after `row` itself, below. messageIndex < 0
+    // for the empty streaming placeholder, which has no message yet to
+    // point at.
+    QWidget *actionsRow = nullptr;
+    if (isUser && messageIndex >= 0) {
+        actionsRow = new QWidget;
+        actionsRow->setObjectName("messageActionsRow");
+        auto *actionsLayout = new QHBoxLayout(actionsRow);
+        actionsLayout->setContentsMargins(14, 2, 14, 0);
+        actionsLayout->setSpacing(6);
+
+        auto *timestampLabel = new QLabel(
+            timestamp.isValid() ? timestamp.toString("MMM d, yyyy 'at' h:mm AP") : QString());
+        timestampLabel->setObjectName("messageTimestampLabel");
+        actionsLayout->addWidget(timestampLabel, /*stretch=*/1);
+
+        const bool dark = m_themeManager && m_themeManager->isDarkActive();
+
+        auto *editButton = new QToolButton;
+        editButton->setObjectName("messageActionButton");
+        editButton->setIcon(Theme::loadThemedIcon(":/icons/edit.svg", dark, 13, "secondaryText"));
+        editButton->setToolTip("Edit");
+        editButton->setCursor(Qt::PointingHandCursor);
+        editButton->setAutoRaise(true);
+        actionsLayout->addWidget(editButton);
+
+        auto *retryButton = new QToolButton;
+        retryButton->setObjectName("messageActionButton");
+        retryButton->setIcon(Theme::loadThemedIcon(":/icons/retry.svg", dark, 13, "secondaryText"));
+        retryButton->setToolTip("Retry");
+        retryButton->setCursor(Qt::PointingHandCursor);
+        retryButton->setAutoRaise(true);
+        connect(retryButton, &QToolButton::clicked, this, [this, messageIndex]() {
+            retryMessage(messageIndex);
+        });
+        actionsLayout->addWidget(retryButton);
+
+        connect(editButton, &QToolButton::clicked, this, [browser, actionsRow, editContainer, editBox]() {
+            browser->setVisible(false);
+            actionsRow->setVisible(false);
+            editContainer->setVisible(true);
+            editBox->setFocus();
+            QTextCursor cursor = editBox->textCursor();
+            cursor.movePosition(QTextCursor::End);
+            editBox->setTextCursor(cursor);
+        });
+        connect(cancelButton, &QPushButton::clicked, this, [browser, actionsRow, editContainer]() {
+            editContainer->setVisible(false);
+            browser->setVisible(true);
+            actionsRow->setVisible(true);
+        });
+        connect(saveButton, &QPushButton::clicked, this, [this, messageIndex, editBox]() {
+            const QString newText = editBox->toPlainText().trimmed();
+            if (!newText.isEmpty())
+                editMessage(messageIndex, newText);
+        });
+    }
+
+    if (isUser) {
+        UserMessageMarker marker;
+        marker.preview = content.left(60).simplified();
+        if (content.length() > 60)
+            marker.preview += "...";
+        if (marker.preview.isEmpty())
+            marker.preview = attachmentNames.isEmpty()
+                ? QString("Message %1").arg(m_userMessageMarkers.size() + 1)
+                : attachmentNames.join(", ");
+        marker.row = row;
+        m_userMessageMarkers.append(marker);
+    }
+
+    // Insert just before the trailing stretch, which must always stay last —
+    // actionsRow (if any) goes directly after row, so it sits between this
+    // prompt and whatever's appended next.
+    const int insertIndex = m_messagesLayout->count() - 1;
+    m_messagesLayout->insertWidget(insertIndex, row);
+    if (actionsRow)
+        m_messagesLayout->insertWidget(insertIndex + 1, actionsRow);
+    scrollToBottom();
+    return browser;
+}
+
+void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLayout *bubbleLayout, const QString &content)
+{
+    static const QRegularExpression mapFence(
+        QStringLiteral("```map\\s*\\n(.*?)```"),
+        QRegularExpression::DotMatchesEverythingOption);
+
+    struct MapBlockSpec
+    {
+        QString query;
+        int zoom = 12;
+    };
+    QVector<MapBlockSpec> mapBlocks;
+
+    QString textOnly;
+    textOnly.reserve(content.size());
+    int lastEnd = 0;
+    QRegularExpressionMatchIterator it = mapFence.globalMatch(content);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        textOnly += content.mid(lastEnd, match.capturedStart() - lastEnd);
+        lastEnd = match.capturedEnd();
+
+        const QJsonObject obj = QJsonDocument::fromJson(match.captured(1).trimmed().toUtf8()).object();
+        const QString query = obj.value("query").toString();
+        if (!query.isEmpty())
+            mapBlocks.append({query, obj.value("zoom").toInt(12)});
+    }
+    textOnly += content.mid(lastEnd);
+
+    browser->setMarkdownWithHtmlBlocks(textOnly);
+
+    for (const MapBlockSpec &spec : mapBlocks)
+        bubbleLayout->addWidget(new MapEmbedWidget(spec.query, spec.zoom));
+}
+
+void ChatWidget::scrollToBottom()
+{
+    // Deferred to the next event-loop turn: a widget added this turn hasn't
+    // updated the scrollbar's range yet, so jumping immediately lands one
+    // message short.
+    QTimer::singleShot(0, this, [this]() {
+        if (m_scrollArea)
+            m_scrollArea->verticalScrollBar()->setValue(m_scrollArea->verticalScrollBar()->maximum());
+    });
+}
+
+void ChatWidget::onSendButtonClicked()
+{
+    if (m_isGenerating)
+        onStopClicked();
+    else
+        onSendClicked();
+}
+
+void ChatWidget::onStopClicked()
+{
+    abortActiveStreamIfAny();
+    m_inputEdit->setFocus();
+}
+
+void ChatWidget::abortActiveStreamIfAny()
+{
+    const QString conversationId = m_activeConversationId;
+    if (!m_streams.contains(conversationId))
+        return; // nothing streaming/queued for the conversation currently on screen
+
+    m_chatQueue->cancel(conversationId); // no-ops on OllamaClient if this turn was still queued, not yet running
+
+    // Neither OllamaClient::abortChat() nor a still-queued cancel() emits
+    // chatDone()/chatError() (see OllamaClient's header), so this replicates
+    // onChatDone()'s cleanup directly. Whatever had already streamed in
+    // stays (finalizeStreamingAssistantMessage() just persists it), rather
+    // than discarding a partial answer.
+    if (m_streamingThinkingWidget)
+        m_streamingThinkingWidget->setThinking(false);
+    m_store->finalizeStreamingAssistantMessage(conversationId);
+
+    m_streams.remove(conversationId);
+    m_streamingBrowser = nullptr;
+    m_streamingBubbleLayout = nullptr;
+    m_streamingThinkingWidget = nullptr;
+
+    setInputEnabled(true);
+    setSendButtonBusy(false);
+}
+
+void ChatWidget::setSendButtonBusy(bool busy)
+{
+    m_isGenerating = busy;
+
+    if (busy) {
+        m_sendButton->setText(QString());
+        const bool dark = m_themeManager && m_themeManager->isDarkActive();
+        m_sendButton->setIcon(Theme::loadThemedIcon(":/icons/stop.svg", dark, 14, "onAccent"));
+        m_sendButton->setToolTip("Stop generating");
+    } else {
+        m_sendButton->setToolTip(QString());
+        // Re-applies whichever style is actually configured (plane/arrow/
+        // text) rather than duplicating that logic here.
+        setSendButtonStyle(m_sendButtonStyle);
+    }
+}
+
+void ChatWidget::onSendClicked()
+{
+    const QString text = m_inputEdit->toPlainText().trimmed();
+    if (text.isEmpty() && m_pendingAttachments.isEmpty())
+        return;
+
+    if (m_activeConversationId.isEmpty()) {
+        // Typing straight into the empty state (nothing selected in the
+        // sidebar yet) — create a conversation on the fly instead of making
+        // the user click "+ New conversation" first.
+        const QString id = m_store->createConversation(m_modelCombo->currentText());
+        emit conversationCreated(id);
+        // MainWindow listens for conversationCreated and selects the new
+        // sidebar row, which calls back into setActiveConversation()
+        // synchronously. Fall back to calling it ourselves in case nothing
+        // is listening.
+        if (m_activeConversationId.isEmpty())
+            setActiveConversation(id);
+    }
+
+    const Conversation *convBefore = m_store->find(m_activeConversationId);
+    const bool wasNewConversation = convBefore && convBefore->title == "New conversation";
+
+    QStringList attachmentNames;
+    for (const PendingAttachment &att : m_pendingAttachments)
+        attachmentNames << att.displayName;
+
+    ChatMessage userMessage;
+    userMessage.role = "user";
+    userMessage.content = text;
+    userMessage.timestamp = QDateTime::currentDateTime();
+    userMessage.attachmentNames = attachmentNames;
+    userMessage.attachmentsContext = buildAttachmentsContext(m_pendingAttachments);
+    userMessage.imagesBase64 = buildImagesBase64(m_pendingAttachments);
+
+    m_inputEdit->clear();
+    m_pendingAttachments.clear();
+    rebuildAttachmentsBar();
+
+    if (m_webSearchEnabled && !text.isEmpty()) {
+        // Search first, then finalize once results (or a definitive "no
+        // results") come back — see the WebSearchClient::searchCompleted
+        // connection in the constructor. The bubble/history append is
+        // deliberately deferred to finalizeAndSendUserMessage() so the
+        // search results can be attached to the *same* message rather than
+        // arriving as a separate, confusing follow-up.
+        setInputEnabled(false);
+        m_pendingUserMessage = userMessage;
+        m_pendingWasNewConversation = wasNewConversation;
+        m_webSearchClient.search(text);
+        return;
+    }
+
+    finalizeAndSendUserMessage(userMessage, wasNewConversation);
+}
+
+void ChatWidget::finalizeAndSendUserMessage(ChatMessage userMessage, bool wasNewConversation)
+{
+    m_store->appendMessage(m_activeConversationId, userMessage);
+    const Conversation *convAfterAppend = m_store->find(m_activeConversationId);
+    const int messageIndex = convAfterAppend ? convAfterAppend->messages.size() - 1 : -1;
+    appendMessageBubble("user", userMessage.content, nullptr, userMessage.attachmentNames,
+                         messageIndex, userMessage.timestamp);
+
+    if (wasNewConversation)
+        emit conversationTitleMayHaveChanged(m_activeConversationId);
+
+    streamAssistantReplyForCurrentHistory();
+}
+
+void ChatWidget::streamAssistantReplyForCurrentHistory()
+{
+    const Conversation *conv = m_store->find(m_activeConversationId);
+    if (!conv)
+        return;
+
+    QJsonArray apiMessages;
+    for (const ChatMessage &m : conv->messages) {
+        // attachmentsContext/webSearchContext were extracted once (at
+        // attach-time / send-time) and persisted on the message, so this
+        // reconstructs the same augmented content on every subsequent turn
+        // without re-reading files or re-searching.
+        QString apiContent = m.content;
+        if (!m.attachmentsContext.isEmpty())
+            apiContent += (apiContent.isEmpty() ? QString() : QStringLiteral("\n\n")) + m.attachmentsContext;
+        if (!m.webSearchContext.isEmpty())
+            apiContent += (apiContent.isEmpty() ? QString() : QStringLiteral("\n\n")) + m.webSearchContext;
+
+        QJsonObject obj{{"role", m.role}, {"content", apiContent}};
+        if (!m.imagesBase64.isEmpty())
+            obj["images"] = QJsonArray::fromStringList(m.imagesBase64);
+        apiMessages.append(obj);
+    }
+
+    const QString conversationId = m_activeConversationId;
+
+    // Reserve an empty assistant bubble now, and keep both its content
+    // widget and its layout — the latter is where a ThinkingSectionWidget
+    // gets inserted later, above the answer text, if this turn ends up
+    // producing any thinking tokens at all (see onChatThinkingDelta).
+    // A fresh StreamState replaces any stale leftover (shouldn't normally
+    // exist — sending a new turn only happens once the previous one for
+    // this conversation has finished/been stopped).
+    m_streams[conversationId] = StreamState();
+    m_streamingThinkingWidget = nullptr;
+    m_streamingBrowser = appendMessageBubble("assistant", QString(), &m_streamingBubbleLayout);
+    setInputEnabled(false);
+    setSendButtonBusy(true);
+
+    // 0 (not set/unchecked) omits options.num_ctx entirely rather than
+    // sending a literal 0 — see OllamaClient::sendChatMessage's comment for
+    // why: 0 isn't "unlimited" in Ollama, it just means "use your own
+    // default," which omitting the field already does on its own.
+    const bool useCustomContextLength = QSettings().value("chat/useCustomContextLength", false).toBool();
+    const int customNumCtx = useCustomContextLength
+        ? QSettings().value("chat/customContextLength", 8192).toInt()
+        : 0;
+
+    // The conversation's own pinned model (set once, at creation — see
+    // ConversationStore::createConversation()) is the authoritative source,
+    // not the combo's live UI state: it's already correct immediately after
+    // a fork (editMessage() carries the original conversation's model
+    // straight into createConversationWithMessages()) without depending on
+    // the model combo having been synced by setActiveConversation()'s
+    // signal cascade first. Only a genuinely brand-new conversation with no
+    // model recorded yet falls back to whatever the combo currently shows.
+    const QString model = !conv->model.isEmpty() ? conv->model : m_modelCombo->currentText();
+
+    // Submitted to the queue rather than sent straight to OllamaClient —
+    // see ChatQueue's header comment. If nothing else is running, this
+    // starts immediately (turnStarted fires synchronously, before enqueue()
+    // returns); otherwise it waits its turn, and onQueuePositionChanged()
+    // shows "N chats ahead" in the meantime if this conversation is the one
+    // on screen.
+    ChatQueue::Turn turn;
+    turn.conversationId = conversationId;
+    turn.model = model;
+    turn.apiMessages = apiMessages;
+    turn.think = m_thinkingEnabled;
+    turn.customNumCtx = customNumCtx;
+    m_chatQueue->enqueue(turn);
+}
+
+void ChatWidget::editMessage(int messageIndex, const QString &newText)
+{
+    const Conversation *conv = m_store->find(m_activeConversationId);
+    if (!conv || messageIndex < 0 || messageIndex >= conv->messages.size())
+        return;
+
+    // "The last prompt" = no other user message follows it in this
+    // conversation — editing that one only discards its own (about to be
+    // regenerated) reply, so it's safe to edit in place. Editing an earlier
+    // one would destroy real conversation built on top of it, so that forks
+    // into a new chat instead (with confirmation) rather than truncating
+    // the original.
+    bool isLastUserMessage = true;
+    for (int i = messageIndex + 1; i < conv->messages.size(); ++i) {
+        if (conv->messages[i].role == "user") {
+            isLastUserMessage = false;
+            break;
+        }
+    }
+
+    if (!isLastUserMessage) {
+        // Same QMessageBox-with-custom-buttons pattern MainWindow uses for
+        // its own destructive-action confirmation (delete chat).
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Question);
+        box.setWindowTitle("Start a New Conversation?");
+        box.setText("Editing an earlier message will start a new conversation with your edit.");
+        box.setInformativeText("This chat will stay exactly as it is.");
+        QPushButton *cancelButton = box.addButton(QMessageBox::Cancel);
+        QPushButton *continueButton = box.addButton("Start New Conversation", QMessageBox::AcceptRole);
+        box.setDefaultButton(continueButton);
+        Q_UNUSED(cancelButton);
+
+        box.exec();
+        if (box.clickedButton() != continueButton)
+            return; // leaves the inline editor open with their typed text, untouched
+
+        // Deliberately does NOT abort the original conversation's stream:
+        // its own dialog text promises "This chat will stay exactly as it
+        // is," and now that streams are per-conversation (see m_streams),
+        // nothing about forking a new one requires stopping it — it keeps
+        // generating in the background exactly as it would if you'd simply
+        // switched away without editing anything.
+
+        // Copies (not references) everything up to the edited message —
+        // conv may be invalidated the moment the store gains a new
+        // conversation below, so nothing from it is touched after this point.
+        QVector<ChatMessage> seedMessages(conv->messages.begin(), conv->messages.begin() + messageIndex);
+        ChatMessage edited = conv->messages[messageIndex];
+        edited.content = newText;
+        edited.timestamp = QDateTime::currentDateTime();
+        seedMessages.append(edited);
+        const QString model = conv->model;
+
+        const QString newId = m_store->createConversationWithMessages(model, seedMessages);
+        emit conversationCreated(newId);
+        // Same fallback as onSendClicked(): conversationCreated() should
+        // already have triggered setActiveConversation(newId) synchronously
+        // via MainWindow's sidebar-selection wiring, but cover the case
+        // where nothing is listening.
+        if (m_activeConversationId != newId)
+            setActiveConversation(newId);
+
+        streamAssistantReplyForCurrentHistory();
+        return;
+    }
+
+    abortActiveStreamIfAny(); // an edit elsewhere shouldn't race with a reply still streaming into a bubble that's about to disappear
+
+    // Keeps the original message's attachments/images — only the typed
+    // text and timestamp change.
+    ChatMessage edited = conv->messages[messageIndex];
+    edited.content = newText;
+    edited.timestamp = QDateTime::currentDateTime();
+
+    m_store->truncateMessagesFrom(m_activeConversationId, messageIndex);
+    m_store->appendMessage(m_activeConversationId, edited);
+
+    renderConversation();
+    streamAssistantReplyForCurrentHistory();
+}
+
+void ChatWidget::retryMessage(int messageIndex)
+{
+    const Conversation *conv = m_store->find(m_activeConversationId);
+    if (!conv || messageIndex < 0 || messageIndex >= conv->messages.size())
+        return;
+
+    abortActiveStreamIfAny();
+
+    // Drops only what followed this message (the old reply), not the
+    // message itself — same prompt, fresh answer.
+    m_store->truncateMessagesFrom(m_activeConversationId, messageIndex + 1);
+
+    renderConversation();
+    streamAssistantReplyForCurrentHistory();
+}
+
+void ChatWidget::onChatThinkingDelta(const QString &conversationId, const QString &tokenText)
+{
+    StreamState &st = m_streams[conversationId]; // must already exist (created by streamAssistantReplyForCurrentHistory)
+    st.thinkingBuffer += tokenText;
+    st.isThinkingActive = true;
+
+    if (conversationId != m_activeConversationId)
+        return; // still streaming into ConversationStore-visible state, just not into any on-screen widget right now
+
+    if (!m_streamingThinkingWidget && m_streamingBubbleLayout) {
+        m_streamingThinkingWidget = new ThinkingSectionWidget;
+        m_streamingThinkingWidget->setThinking(true);
+        m_streamingBubbleLayout->insertWidget(0, m_streamingThinkingWidget); // above the answer text
+    }
+    if (m_streamingThinkingWidget)
+        m_streamingThinkingWidget->appendThinkingText(tokenText);
+    scrollToBottom();
+}
+
+void ChatWidget::onChatDelta(const QString &conversationId, const QString &tokenText)
+{
+    StreamState &st = m_streams[conversationId];
+
+    // The first real content token marks the end of the thinking phase for
+    // this turn, if it had one at all.
+    st.isThinkingActive = false;
+    if (conversationId == m_activeConversationId && m_streamingThinkingWidget)
+        m_streamingThinkingWidget->setThinking(false);
+
+    // Ollama only reports exact token counts once the turn is done (see
+    // OllamaClient::sendChatMessage), so this is a live estimate: one
+    // content delta ~= one token in practice, timed from the first one.
+    // onChatUsage() refines it against the server's real eval_count once
+    // the turn finishes.
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (st.startMs == 0)
+        st.startMs = nowMs;
+    ++st.tokenCount;
+    const qint64 elapsedMs = nowMs - st.startMs;
+    if (elapsedMs > 0) {
+        st.lastTokensPerSecond = st.tokenCount / (elapsedMs / 1000.0);
+        m_lastTokensPerSecondByConversation[conversationId] = st.lastTokensPerSecond;
+    }
+
+    st.buffer += tokenText;
+
+    // updateStreamingAssistantMessage() persists into ConversationStore's
+    // in-memory state regardless of whether this conversation is on screen
+    // — this is what makes a background reply's *content* actually keep
+    // building while another conversation is shown, even though nothing
+    // visible updates for it until you switch back.
+    m_store->updateStreamingAssistantMessage(conversationId, st.buffer);
+
+    if (conversationId != m_activeConversationId)
+        return;
+
+    if (m_streamingBrowser)
+        m_streamingBrowser->setMarkdownWithHtmlBlocks(st.buffer);
+    scrollToBottom();
+    updateContextUsageDisplay();
+}
+
+void ChatWidget::onChatDone(const QString &conversationId)
+{
+    m_store->finalizeStreamingAssistantMessage(conversationId);
+
+    const StreamState st = m_streams.value(conversationId);
+    m_streams.remove(conversationId);
+
+    if (conversationId != m_activeConversationId)
+        return; // background turn finished; its bubble will render as static/final next time this conversation is shown
+
+    if (m_streamingThinkingWidget)
+        m_streamingThinkingWidget->setThinking(false);
+
+    // Re-renders the now-complete reply through the map-block-aware path —
+    // during streaming, onChatDelta() only ever calls setMarkdownWithHtmlBlocks()
+    // directly (a ```map fence isn't meaningful until it's actually closed),
+    // so this is what upgrades a bubble that turned out to contain one from
+    // showing raw fenced JSON to an actual embedded map.
+    if (m_streamingBrowser && m_streamingBubbleLayout)
+        renderAssistantContent(m_streamingBrowser, m_streamingBubbleLayout, st.buffer);
+
+    m_streamingBrowser = nullptr;
+    m_streamingBubbleLayout = nullptr;
+    m_streamingThinkingWidget = nullptr;
+    setInputEnabled(true);
+    setSendButtonBusy(false);
+    m_inputEdit->setFocus();
+}
+
+void ChatWidget::onChatError(const QString &conversationId, const QString &message)
+{
+    m_streams.remove(conversationId);
+
+    if (conversationId != m_activeConversationId)
+        return; // background turn failed; whatever it streamed before failing is already persisted
+
+    appendMessageBubble("error", message);
+
+    m_streamingBrowser = nullptr;
+    m_streamingBubbleLayout = nullptr;
+    m_streamingThinkingWidget = nullptr;
+    setInputEnabled(true);
+    setSendButtonBusy(false);
+}
+
+void ChatWidget::onChatUsage(const QString &conversationId, int promptTokens, int completionTokens)
+{
+    if (conversationId.isEmpty())
+        return;
+    m_usedTokensByConversation[conversationId] = promptTokens + completionTokens;
+
+    // Recompute against Ollama's own completion-token count now that it's
+    // known, rather than leaving the streaming estimate as the final value.
+    // Emitted (see OllamaClient) before chatDone() specifically so the
+    // StreamState this reads is still present.
+    auto it = m_streams.find(conversationId);
+    if (it != m_streams.end() && it->startMs != 0) {
+        const qint64 elapsedMs = QDateTime::currentMSecsSinceEpoch() - it->startMs;
+        if (elapsedMs > 0 && completionTokens > 0) {
+            it->lastTokensPerSecond = completionTokens / (elapsedMs / 1000.0);
+            m_lastTokensPerSecondByConversation[conversationId] = it->lastTokensPerSecond;
+        }
+    }
+
+    if (conversationId == m_activeConversationId)
+        updateContextUsageDisplay();
+}
+
+void ChatWidget::onModelContextLengthFetched(const QString &model, int contextLength)
+{
+    if (contextLength > 0)
+        m_contextLengthByModel[model] = contextLength;
+
+    const Conversation *conv = m_store->find(m_activeConversationId);
+    if (conv && conv->model == model)
+        updateContextUsageDisplay();
+}
+
+void ChatWidget::onModelComboChanged(int index)
+{
+    Q_UNUSED(index);
+    const QString model = m_modelCombo->currentText();
+    if (model.isEmpty())
+        return;
+
+    // The combo is only ever enabled while the active conversation has no
+    // messages yet (see setActiveConversation()), so reaching here with a
+    // real change means the user is picking a model before their first
+    // message — persist it onto the conversation itself so it's what
+    // streamAssistantReplyForCurrentHistory() actually sends, not just
+    // whatever model the conversation happened to be created with.
+    if (!m_activeConversationId.isEmpty()) {
+        const Conversation *conv = m_store->find(m_activeConversationId);
+        if (conv && conv->messages.isEmpty())
+            m_store->setConversationModel(m_activeConversationId, model);
+    }
+
+    ensureContextLengthKnown(model);
+    updateContextUsageDisplay();
+}
+
+void ChatWidget::onQueueTurnStarted(const QString &conversationId)
+{
+    // Clears any "Waiting…" placeholder text left by onQueuePositionChanged()
+    // now that this conversation's turn has actually started — real tokens
+    // are about to start arriving and will overwrite it anyway, but this
+    // avoids a stale placeholder lingering if the turn errors before any
+    // token comes through.
+    if (conversationId == m_activeConversationId && m_streamingBrowser)
+        m_streamingBrowser->setPlainText(QString());
+}
+
+void ChatWidget::onQueuePositionChanged(const QString &conversationId, int aheadCount)
+{
+    if (conversationId != m_activeConversationId || !m_streamingBrowser || aheadCount <= 0)
+        return;
+
+    m_streamingBrowser->setPlainText(aheadCount == 1
+        ? "Waiting for another chat to finish…"
+        : QString("Waiting — %1 chats ahead in the queue…").arg(aheadCount));
+}
+
+void ChatWidget::ensureContextLengthKnown(const QString &model)
+{
+    if (model.isEmpty() || m_contextLengthByModel.contains(model))
+        return;
+    m_ollamaClient->fetchModelContextLength(model);
+}
+
+void ChatWidget::updateContextUsageDisplay()
+{
+    const int used = m_usedTokensByConversation.value(m_activeConversationId, 0);
+    const QString model = m_modelCombo->currentText();
+    const int modelMaxContext = m_contextLengthByModel.value(model, 0);
+
+    // If a custom context length is set, it's what's actually being
+    // requested (see streamAssistantReplyForCurrentHistory()) — but Ollama
+    // still hard-clamps to the model's own trained maximum regardless, so
+    // the smaller of the two is the real effective ceiling. Whichever one
+    // isn't known yet (0) just falls out of the min() naturally.
+    const bool useCustomContextLength = QSettings().value("chat/useCustomContextLength", false).toBool();
+    const int customContextLength = useCustomContextLength
+        ? QSettings().value("chat/customContextLength", 8192).toInt()
+        : 0;
+    const int maxContext = (modelMaxContext > 0 && customContextLength > 0)
+        ? qMin(modelMaxContext, customContextLength)
+        : qMax(modelMaxContext, customContextLength);
+
+    const double lastTokensPerSecond = m_lastTokensPerSecondByConversation.value(m_activeConversationId, 0.0);
+    const QString speedSuffix = lastTokensPerSecond > 0.0
+        ? QString(" · %1 tok/s").arg(lastTokensPerSecond, 0, 'f', 1)
+        : QString();
+
+    if (maxContext > 0) {
+        const int percent = qBound(0, static_cast<int>((double(used) / double(maxContext)) * 100.0), 100);
+        m_contextUsageProgress->setValue(percent);
+
+        // Flip the bar red near the ceiling — see Theme.cpp for the
+        // [nearLimit="true"] rule this property drives.
+        m_contextUsageProgress->setProperty("nearLimit", percent >= 85);
+        m_contextUsageProgress->style()->unpolish(m_contextUsageProgress);
+        m_contextUsageProgress->style()->polish(m_contextUsageProgress);
+
+        m_contextUsageLabel->setText(
+            QString("%1 / %2 tokens (%3%)%4").arg(used).arg(maxContext).arg(percent).arg(speedSuffix));
+    } else {
+        m_contextUsageProgress->setValue(0);
+        m_contextUsageLabel->setText(used > 0
+            ? QString("%1 tokens used (context size unknown)%2").arg(used).arg(speedSuffix)
+            : "Context: —");
+    }
+}
+
+void ChatWidget::onAttachClicked()
+{
+    const QStringList paths = QFileDialog::getOpenFileNames(this, "Attach files to message");
+    if (paths.isEmpty())
+        return;
+
+    for (const QString &path : paths) {
+        PendingAttachment att;
+        att.filePath = path;
+        att.displayName = QFileInfo(path).fileName();
+        att.isImage = isImageFile(path);
+        m_pendingAttachments.append(att);
+    }
+    rebuildAttachmentsBar();
+}
+
+void ChatWidget::onJumpToClicked()
+{
+    if (m_userMessageMarkers.isEmpty())
+        return;
+
+    // Built fresh each click rather than kept around — same one-shot popup
+    // pattern MainWindow uses for its own context menus (see
+    // MainWindow::buildDeleteMenu).
+    QMenu menu(this);
+    for (const UserMessageMarker &marker : m_userMessageMarkers) {
+        QAction *action = menu.addAction(marker.preview);
+        QWidget *row = marker.row;
+        connect(action, &QAction::triggered, this, [this, row]() {
+            m_scrollArea->ensureWidgetVisible(row, 0, 40);
+        });
+    }
+    menu.exec(m_jumpToButton->mapToGlobal(QPoint(0, m_jumpToButton->height())));
+}
+
+void ChatWidget::onWebSearchToggled(bool enabled)
+{
+    m_webSearchEnabled = enabled;
+    updateToolsButtonAppearance();
+}
+
+void ChatWidget::onThinkingToggled(bool enabled)
+{
+    m_thinkingEnabled = enabled;
+    updateToolsButtonAppearance();
+}
+
+void ChatWidget::updateToolsButtonAppearance()
+{
+    QStringList activeParts;
+    if (m_webSearchEnabled)
+        activeParts << "Web";
+    if (!m_thinkingEnabled)
+        activeParts << "No thinking";
+
+    m_toolsButton->setText(activeParts.isEmpty() ? "Tools" : "Tools: " + activeParts.join(", "));
+    // Drives Theme.cpp's #toolsButton[active="true"] rule — an accent tint
+    // so an enabled tool stays visible even with the menu closed.
+    m_toolsButton->setProperty("active", !activeParts.isEmpty());
+    m_toolsButton->style()->unpolish(m_toolsButton);
+    m_toolsButton->style()->polish(m_toolsButton);
+    reloadThemedIcons(); // each menu item's icon tints to accent while its own toggle is on
+}
+
+void ChatWidget::onVoicePressed()
+{
+    m_voiceButton->setProperty("recording", true);
+    m_voiceButton->style()->unpolish(m_voiceButton);
+    m_voiceButton->style()->polish(m_voiceButton);
+    m_voiceRecorder.startRecording();
+    reloadThemedIcons();
+}
+
+void ChatWidget::onVoiceReleased()
+{
+    m_voiceButton->setProperty("recording", false);
+    m_voiceButton->style()->unpolish(m_voiceButton);
+    m_voiceButton->style()->polish(m_voiceButton);
+    m_voiceRecorder.stopRecording(); // result arrives via onVoiceRecordingFinished, asynchronously
+    reloadThemedIcons();
+}
+
+void ChatWidget::onVoiceRecordingFinished(const QString &filePath)
+{
+    const QString transcript = transcribeAudio(filePath);
+    QFile::remove(filePath); // nothing keeps the raw audio once transcribed (or not)
+
+    if (transcript.isEmpty()) {
+        appendMessageBubble("error",
+            "Voice recorded, but transcription isn't implemented yet, so nothing was sent. "
+            "(A real speech-to-text engine is planned as a follow-up — Ollama itself doesn't do this.)");
+        return;
+    }
+
+    // Once transcription is real, this is what makes voice "trigger a send
+    // directly" rather than just filling the box: no other change needed
+    // here, transcribeAudio() returning real text is the whole switch.
+    m_inputEdit->setPlainText(transcript);
+    onSendClicked();
+}
+
+void ChatWidget::onVoiceRecordingFailed(const QString &errorMessage)
+{
+    appendMessageBubble("error", "Voice recording failed: " + errorMessage);
+}
+
+QString ChatWidget::transcribeAudio(const QString &filePath) const
+{
+    Q_UNUSED(filePath);
+    // Placeholder — see VoiceRecorder's header comment and this method's
+    // declaration. Returning empty tells onVoiceRecordingFinished() there's
+    // nothing to send yet.
+    return QString();
+}
+
+void ChatWidget::reloadThemedIcons()
+{
+    // updateToolsButtonAppearance() calls this to refresh the web-search/
+    // thinking icons' tint, and it's invoked once during construction
+    // before m_voiceButton (built later in the constructor) exists yet —
+    // guard each widget rather than relying on call order.
+    if (!m_webSearchAction || !m_thinkingAction || !m_voiceButton)
+        return;
+
+    const bool dark = m_themeManager && m_themeManager->isDarkActive();
+
+    // Each icon's own color reflects its own toggle/recording state —
+    // accent (or danger, for an active recording) when on, the normal
+    // secondary-text tone otherwise — rather than being tied to any
+    // "non-default" summary logic elsewhere.
+    m_webSearchAction->setIcon(Theme::loadThemedIcon(
+        ":/icons/web-search.svg", dark, 16, m_webSearchEnabled ? "accent" : "secondaryText"));
+    m_thinkingAction->setIcon(Theme::loadThemedIcon(
+        ":/icons/thinking.svg", dark, 16, m_thinkingEnabled ? "accent" : "secondaryText"));
+    m_voiceButton->setIcon(Theme::loadThemedIcon(
+        ":/icons/microphone.svg", dark, 16, m_voiceRecorder.isRecording() ? "danger" : "secondaryText"));
+
+    reloadSendButtonIcon(); // also theme-dependent, though driven by m_sendButtonStyle rather than a toggle
+}
+
+void ChatWidget::reloadSendButtonIcon()
+{
+    if (!m_sendButton || m_sendButtonStyle != "plane") {
+        if (m_sendButton)
+            m_sendButton->setIcon(QIcon());
+        return;
+    }
+
+    const bool dark = m_themeManager && m_themeManager->isDarkActive();
+    // "onAccent" (white in both themes) rather than a theme-following tone
+    // — the icon sits on the button's solid accent-colored fill, which
+    // needs steady contrast regardless of light/dark mode.
+    m_sendButton->setIcon(Theme::loadThemedIcon(":/icons/send.svg", dark, 16, "onAccent"));
+}
+
+void ChatWidget::rebuildAttachmentsBar()
+{
+    // Index 0 is always the earliest remaining chip while the trailing
+    // stretch (added once, in the constructor) sits last — same pattern as
+    // clearMessages().
+    while (m_attachmentsLayout->count() > 1) {
+        QLayoutItem *item = m_attachmentsLayout->takeAt(0);
+        if (item->widget())
+            item->widget()->deleteLater();
+        delete item;
+    }
+
+    for (const PendingAttachment &att : m_pendingAttachments) {
+        auto *chip = new QFrame;
+        chip->setObjectName("attachmentChip");
+        auto *chipLayout = new QHBoxLayout(chip);
+        chipLayout->setContentsMargins(8, 3, 4, 3);
+        chipLayout->setSpacing(4);
+
+        auto *nameLabel = new QLabel(att.displayName);
+        nameLabel->setObjectName("attachmentChipLabel");
+        chipLayout->addWidget(nameLabel);
+
+        auto *removeButton = new QToolButton;
+        removeButton->setObjectName("attachmentChipRemove");
+        removeButton->setText(QString::fromUtf8("\xC3\x97")); // "×" — plain glyph, not an emoji (see ThinkingSectionWidget's spinner for why emoji are avoided here)
+        removeButton->setToolTip("Remove");
+        removeButton->setCursor(Qt::PointingHandCursor);
+        removeButton->setAutoRaise(true);
+        const QString filePath = att.filePath;
+        connect(removeButton, &QToolButton::clicked, this, [this, filePath]() {
+            removeAttachmentByPath(filePath);
+        });
+        chipLayout->addWidget(removeButton);
+
+        m_attachmentsLayout->insertWidget(m_attachmentsLayout->count() - 1, chip);
+    }
+
+    m_attachmentsBar->setVisible(!m_pendingAttachments.isEmpty());
+}
+
+void ChatWidget::removeAttachmentByPath(const QString &filePath)
+{
+    for (int i = 0; i < m_pendingAttachments.size(); ++i) {
+        if (m_pendingAttachments[i].filePath == filePath) {
+            m_pendingAttachments.removeAt(i);
+            break;
+        }
+    }
+    rebuildAttachmentsBar();
+}
+
+bool ChatWidget::isImageFile(const QString &path)
+{
+    static const QStringList imageExtensions = {"png", "jpg", "jpeg", "gif", "bmp", "webp"};
+    return imageExtensions.contains(QFileInfo(path).suffix().toLower());
+}
+
+QString ChatWidget::buildAttachmentsContext(const QVector<PendingAttachment> &attachments) const
+{
+    QString context;
+    for (const PendingAttachment &att : attachments) {
+        if (att.isImage)
+            continue; // images travel via the "images" field instead, see buildImagesBase64()
+
+        QFile file(att.filePath);
+        if (!file.open(QIODevice::ReadOnly))
+            continue;
+
+        const QByteArray bytes = file.readAll();
+        if (bytes.contains('\0'))
+            continue; // looks binary — don't dump garbage into the model's context
+
+        if (!context.isEmpty())
+            context += "\n\n";
+        context += QString("--- Attached file: %1 ---\n%2\n--- End of %1 ---")
+                       .arg(att.displayName, QString::fromUtf8(bytes));
+    }
+    return context;
+}
+
+QStringList ChatWidget::buildImagesBase64(const QVector<PendingAttachment> &attachments) const
+{
+    QStringList images;
+    for (const PendingAttachment &att : attachments) {
+        if (!att.isImage)
+            continue;
+        QFile file(att.filePath);
+        if (file.open(QIODevice::ReadOnly))
+            images << QString::fromLatin1(file.readAll().toBase64());
+    }
+    return images;
+}
+
+bool ChatWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_inputEdit && m_inputCard
+        && (event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut)) {
+        m_inputCard->setProperty("focused", event->type() == QEvent::FocusIn);
+        m_inputCard->style()->unpolish(m_inputCard);
+        m_inputCard->style()->polish(m_inputCard);
+    } else if (watched == m_emptyStatePanel && event->type() == QEvent::Resize) {
+        updateEmptyStateInputWidth();
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+void ChatWidget::setInputEnabled(bool enabled)
+{
+    m_inputEdit->setEnabled(enabled);
+    // m_sendButton deliberately isn't touched here — it stays enabled
+    // throughout a reply so it can double as the stop button (see
+    // setSendButtonBusy()/onSendButtonClicked()), unlike the textarea,
+    // which genuinely can't be used mid-stream.
+}

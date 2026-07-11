@@ -1,0 +1,12 @@
+<RCC>
+    <qresource prefix="/">
+        <file>icons/ollama.svg</file>
+        <file>icons/web-search.svg</file>
+        <file>icons/thinking.svg</file>
+        <file>icons/microphone.svg</file>
+        <file>icons/send.svg</file>
+        <file>icons/stop.svg</file>
+        <file>icons/edit.svg</file>
+        <file>icons/retry.svg</file>
+    </qresource>
+</RCC>

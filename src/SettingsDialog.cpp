@@ -1,0 +1,426 @@
+#include "SettingsDialog.h"
+#include "Theme.h"
+
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QFormLayout>
+#include <QComboBox>
+#include <QLabel>
+#include <QPushButton>
+#include <QGroupBox>
+#include <QDialogButtonBox>
+#include <QSettings>
+#include <QColorDialog>
+#include <QColor>
+#include <QCheckBox>
+#include <QSlider>
+#include <QSpinBox>
+
+SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient, QWidget *parent)
+    : QDialog(parent)
+    , m_themeManager(themeManager)
+    , m_ollamaClient(ollamaClient)
+{
+    setWindowTitle("Settings");
+    setMinimumWidth(380);
+    // Tall enough that the "Model" group (context length slider + its hint
+    // text + the model-optimization checkbox + its own hint text) isn't
+    // cramped against the dialog's default height — without this, the
+    // dialog opens at just barely its sizeHint and the last section or two
+    // reads as cropped until manually resized.
+    setMinimumHeight(720);
+
+    auto *layout = new QVBoxLayout(this);
+
+    // --- Appearance ------------------------------------------------------
+    // Wrapped in a bordered QGroupBox (rather than a bare QLabel heading)
+    // so this section is unmistakably visible as its own block, not just
+    // relying on font-weight to separate it from what's below.
+    auto *appearanceGroup = new QGroupBox("Appearance");
+    auto *appearanceLayout = new QFormLayout(appearanceGroup);
+
+    m_themeCombo = new QComboBox;
+    m_themeCombo->addItem("Light", static_cast<int>(ThemeManager::Mode::Light));
+    m_themeCombo->addItem("Dark", static_cast<int>(ThemeManager::Mode::Dark));
+    m_themeCombo->addItem("Auto (match system)", static_cast<int>(ThemeManager::Mode::Auto));
+
+    const int currentIdx = m_themeCombo->findData(static_cast<int>(m_themeManager->mode()));
+    if (currentIdx >= 0)
+        m_themeCombo->setCurrentIndex(currentIdx);
+
+    connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::onThemeComboChanged);
+    appearanceLayout->addRow("Theme", m_themeCombo);
+
+    m_sendButtonStyleCombo = new QComboBox;
+    m_sendButtonStyleCombo->addItem("Paper plane icon", "plane");
+    m_sendButtonStyleCombo->addItem(QString::fromUtf8("Arrow icon (\xE2\x86\x91)"), "arrow");
+    m_sendButtonStyleCombo->addItem("Text label (\"Send\")", "text");
+
+    const QString savedStyle = QSettings().value("chat/sendButtonStyle", "plane").toString();
+    const int sendStyleIdx = m_sendButtonStyleCombo->findData(savedStyle);
+    if (sendStyleIdx >= 0)
+        m_sendButtonStyleCombo->setCurrentIndex(sendStyleIdx);
+
+    connect(m_sendButtonStyleCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::onSendButtonStyleComboChanged);
+    appearanceLayout->addRow("Send button", m_sendButtonStyleCombo);
+
+    auto *colorsHeading = new QLabel("Colors");
+    colorsHeading->setStyleSheet("font-weight: 600; margin-top: 6px;");
+    appearanceLayout->addRow(colorsHeading);
+
+    // "Application" drives the whole app's accent (focus borders, the
+    // send/stop button, progress-bar fills, etc. — see Theme::styleSheet())
+    // — not just the stats panel. Each row's own reset button (rather than
+    // one shared "reset all") lets any single color be reverted on its own.
+    appearanceLayout->addRow("Application", makeColorPickerRow("appearance/accentColor"));
+
+    // The four stats-meter colors share one row (a borderless, headerless
+    // 4-column strip — own small label above each swatch — rather than one
+    // QFormLayout row per meter) purely to save vertical space; each
+    // column's swatch/reset pair is still the same makeColorPickerRow()
+    // widget used everywhere else.
+    auto *statsColorsRow = new QWidget;
+    auto *statsColorsLayout = new QHBoxLayout(statsColorsRow);
+    statsColorsLayout->setContentsMargins(0, 0, 0, 0);
+    statsColorsLayout->setSpacing(16);
+
+    auto addStatsColorColumn = [this, statsColorsLayout](const QString &label, const QString &settingsKey) {
+        auto *column = new QWidget;
+        auto *columnLayout = new QVBoxLayout(column);
+        columnLayout->setContentsMargins(0, 0, 0, 0);
+        columnLayout->setSpacing(2);
+
+        auto *nameLabel = new QLabel(label);
+        nameLabel->setAlignment(Qt::AlignHCenter);
+        nameLabel->setStyleSheet("font-size: 11px; font-weight: normal; opacity: 0.7;");
+        columnLayout->addWidget(nameLabel, 0, Qt::AlignHCenter);
+        columnLayout->addWidget(makeColorPickerRow(settingsKey), 0, Qt::AlignHCenter);
+
+        // Equal stretch factor (not a fixed sizeHint width) is what makes
+        // all four columns share the row's full width evenly, rather than
+        // each just claiming its own contents' width with the leftover
+        // space dumped into one trailing stretch.
+        statsColorsLayout->addWidget(column, /*stretch=*/1);
+    };
+    addStatsColorColumn("CPU", "stats/cpuColor");
+    addStatsColorColumn("RAM", "stats/ramColor");
+    addStatsColorColumn("GPU", "stats/gpuColor");
+    addStatsColorColumn("VRAM", "stats/vramColor");
+
+    appearanceLayout->addRow(statsColorsRow);
+
+    layout->addWidget(appearanceGroup);
+
+    // --- Model ---------------------------------------------------------------
+    auto *modelGroup = new QGroupBox("Model");
+    auto *modelLayout = new QVBoxLayout(modelGroup);
+
+    m_useCustomContextLengthCheck = new QCheckBox("Use custom context length");
+    const bool customCtxEnabled = QSettings().value("chat/useCustomContextLength", false).toBool();
+    m_useCustomContextLengthCheck->setChecked(customCtxEnabled);
+    connect(m_useCustomContextLengthCheck, &QCheckBox::toggled,
+            this, &SettingsDialog::onContextLengthEnabledToggled);
+    modelLayout->addWidget(m_useCustomContextLengthCheck);
+
+    auto *contextLengthHint = new QLabel(
+        "Unchecked, Ollama picks its own default context length (its OLLAMA_CONTEXT_LENGTH env "
+        "var, or an automatic VRAM-based default). There's no \"unlimited\" option — every model "
+        "has a hard maximum context length that Ollama enforces regardless of this setting.");
+    contextLengthHint->setWordWrap(true);
+    contextLengthHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    modelLayout->addWidget(contextLengthHint);
+
+    auto *contextSliderRow = new QHBoxLayout;
+    m_contextLengthSlider = new QSlider(Qt::Horizontal);
+    m_contextLengthSlider->setObjectName("contextLengthSlider");
+    // 262144 (2^18), not a round 256000 — matches the actual context_length
+    // several real models report (confirmed against a live Ollama server:
+    // gemma4's GGUF metadata reports exactly 262144), so the slider's max
+    // lines up with a real achievable ceiling instead of an arbitrary number.
+    m_contextLengthSlider->setRange(1, 262144);
+    m_contextLengthSlider->setSingleStep(1024);
+    m_contextLengthSlider->setPageStep(8192);
+    contextSliderRow->addWidget(m_contextLengthSlider, /*stretch=*/1);
+
+    m_contextLengthSpinBox = new QSpinBox;
+    m_contextLengthSpinBox->setRange(1, 262144);
+    m_contextLengthSpinBox->setSuffix(" tokens");
+    contextSliderRow->addWidget(m_contextLengthSpinBox);
+
+    modelLayout->addLayout(contextSliderRow);
+
+    const int storedContextLength = QSettings().value("chat/customContextLength", 8192).toInt();
+    m_contextLengthSlider->setValue(storedContextLength);
+    m_contextLengthSpinBox->setValue(storedContextLength);
+    m_contextLengthSlider->setEnabled(customCtxEnabled);
+    m_contextLengthSpinBox->setEnabled(customCtxEnabled);
+
+    // Kept in sync with each other (Qt no-ops setValue() when the value
+    // hasn't actually changed, so this can't loop) — persistence/emit only
+    // needs to happen once, off the spinbox's own valueChanged.
+    connect(m_contextLengthSlider, &QSlider::valueChanged, m_contextLengthSpinBox, &QSpinBox::setValue);
+    connect(m_contextLengthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+            m_contextLengthSlider, &QSlider::setValue);
+    connect(m_contextLengthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &SettingsDialog::onContextLengthValueChanged);
+
+    m_modelOptimizationCheck = new QCheckBox("Queing model optimization");
+    const bool modelOptimizationEnabled = QSettings().value("chat/modelOptimization", false).toBool();
+    m_modelOptimizationCheck->setChecked(modelOptimizationEnabled);
+    connect(m_modelOptimizationCheck, &QCheckBox::toggled,
+            this, &SettingsDialog::onModelOptimizationToggled);
+    modelLayout->addWidget(m_modelOptimizationCheck);
+
+    auto *modelOptimizationHint = new QLabel(
+        "Ollama only generates for one model at a time, so switching between chats that use "
+        "different models queues them up rather than sending everything at once. Off (default), "
+        "chats are processed strictly in the order you send them, even if that means reloading a "
+        "model repeatedly. On, chats waiting on the model that's already loaded may jump ahead of "
+        "others to reduce how often models get swapped.");
+    modelOptimizationHint->setWordWrap(true);
+    modelOptimizationHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    // Real QWidget margins, not QSS "padding" — a stylesheet's padding on a
+    // word-wrapped QLabel isn't reliably folded into its own heightForWidth()
+    // calculation (that's what caused the clipped top/bottom lines before),
+    // whereas setContentsMargins() always is, since it's native Qt layout
+    // geometry rather than something QStyleSheetStyle has to intercept.
+    modelOptimizationHint->setContentsMargins(0, 4, 0, 4);
+    modelLayout->addWidget(modelOptimizationHint);
+
+    layout->addWidget(modelGroup);
+
+    // --- Offload model -----------------------------------------------------
+    auto *offloadGroup = new QGroupBox("Offload model");
+    auto *offloadLayout = new QVBoxLayout(offloadGroup);
+
+    auto *offloadHeaderRow = new QHBoxLayout;
+    auto *offloadHint = new QLabel(
+        "Frees a model's memory/VRAM immediately instead of waiting for its normal idle timeout.");
+    offloadHint->setWordWrap(true);
+    offloadHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    offloadHeaderRow->addWidget(offloadHint, /*stretch=*/1);
+    auto *refreshButton = new QPushButton("Refresh");
+    connect(refreshButton, &QPushButton::clicked, this, &SettingsDialog::refreshLoadedModels);
+    offloadHeaderRow->addWidget(refreshButton);
+    offloadLayout->addLayout(offloadHeaderRow);
+
+    m_loadedModelsLayout = new QVBoxLayout;
+    m_loadedModelsLayout->setSpacing(4);
+    offloadLayout->addLayout(m_loadedModelsLayout);
+
+    m_loadedModelsStatusLabel = new QLabel("Loading…");
+    m_loadedModelsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
+    m_loadedModelsLayout->addWidget(m_loadedModelsStatusLabel);
+
+    layout->addWidget(offloadGroup);
+
+    layout->addStretch();
+
+    auto *placeholderNote = new QLabel(
+        "More settings (server connection, model defaults, keep-alive) coming soon.");
+    placeholderNote->setObjectName("settingsHint");
+    placeholderNote->setWordWrap(true);
+    layout->addWidget(placeholderNote);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    layout->addWidget(buttons);
+
+    connect(m_ollamaClient, &OllamaClient::loadedModelsListed,
+            this, &SettingsDialog::onLoadedModelsListed);
+    connect(m_ollamaClient, &OllamaClient::modelUnloaded,
+            this, &SettingsDialog::onModelUnloaded);
+
+    refreshLoadedModels();
+
+    // Word-wrapped QLabels (the hint text under each checkbox/slider) can
+    // report a stale, too-small heightForWidth() on the very first layout
+    // pass — before the dialog has actually been resized to its real
+    // width — which is what read as their last line being clipped. Forcing
+    // one more layout pass now, after every widget/width is already known,
+    // fixes that for good rather than needing a hand-tuned margin per label.
+    layout->activate();
+    adjustSize();
+}
+
+void SettingsDialog::onThemeComboChanged(int index)
+{
+    const auto mode = static_cast<ThemeManager::Mode>(m_themeCombo->itemData(index).toInt());
+    m_themeManager->setMode(mode);
+}
+
+void SettingsDialog::onSendButtonStyleComboChanged(int index)
+{
+    const QString style = m_sendButtonStyleCombo->itemData(index).toString();
+    QSettings().setValue("chat/sendButtonStyle", style);
+    emit sendButtonStyleChanged(style);
+}
+
+void SettingsDialog::onContextLengthEnabledToggled(bool enabled)
+{
+    QSettings().setValue("chat/useCustomContextLength", enabled);
+    m_contextLengthSlider->setEnabled(enabled);
+    m_contextLengthSpinBox->setEnabled(enabled);
+    emit contextLengthSettingChanged();
+}
+
+void SettingsDialog::onContextLengthValueChanged(int value)
+{
+    QSettings().setValue("chat/customContextLength", value);
+    emit contextLengthSettingChanged();
+}
+
+void SettingsDialog::onModelOptimizationToggled(bool enabled)
+{
+    QSettings().setValue("chat/modelOptimization", enabled);
+    emit modelOptimizationChanged(enabled);
+}
+
+QString SettingsDialog::currentColorHex(const QString &settingsKey) const
+{
+    const QString stored = QSettings().value(settingsKey).toString();
+    if (!stored.isEmpty())
+        return stored;
+
+    const bool dark = m_themeManager->isDarkActive();
+    // The Application picker itself falls back to the theme's hardcoded
+    // default (not currentAccentColor(), which would just reference its own
+    // still-unset value) — every other color falls back to the *effective*
+    // accent, so its swatch matches what StatsStripWidget actually renders.
+    if (settingsKey == QLatin1String("appearance/accentColor"))
+        return Theme::colorToken("accent", dark);
+    return Theme::currentAccentColor(dark);
+}
+
+void SettingsDialog::refreshColorSwatch(QPushButton *button, const QString &settingsKey)
+{
+    button->setStyleSheet(QString(
+        "background-color: %1; border: 1px solid palette(mid); border-radius: 4px;")
+        .arg(currentColorHex(settingsKey)));
+}
+
+void SettingsDialog::notifyColorChanged(const QString &changedKey)
+{
+    // Affects the whole app's stylesheet (borders, buttons, progress fills
+    // — see Theme::styleSheet()), not just the stats panel, so this needs
+    // the full re-apply-and-notify path rather than just statsColorsChanged().
+    if (changedKey == QLatin1String("appearance/accentColor"))
+        m_themeManager->notifyAppearanceChanged();
+
+    // Any swatch still on "default" visually tracks whichever color just
+    // changed (the effective accent), so all of them need refreshing, not
+    // just the one that was actually edited.
+    for (const auto &entry : m_colorSwatchButtons)
+        refreshColorSwatch(entry.first, entry.second);
+
+    emit statsColorsChanged();
+}
+
+QWidget *SettingsDialog::makeColorPickerRow(const QString &settingsKey)
+{
+    auto *row = new QWidget;
+    auto *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(6);
+
+    auto *swatchButton = new QPushButton;
+    swatchButton->setFixedSize(32, 20);
+    swatchButton->setCursor(Qt::PointingHandCursor);
+    swatchButton->setToolTip("Click to choose a color");
+    refreshColorSwatch(swatchButton, settingsKey);
+    rowLayout->addWidget(swatchButton);
+
+    auto *resetButton = new QPushButton(QString::fromUtf8("\xE2\x86\xBA")); // U+21BA ANTICLOCKWISE OPEN CIRCLE ARROW — plain glyph, not an emoji
+    resetButton->setFixedSize(24, 20);
+    resetButton->setCursor(Qt::PointingHandCursor);
+    resetButton->setToolTip("Reset to default");
+    rowLayout->addWidget(resetButton);
+    rowLayout->addStretch(1);
+
+    connect(swatchButton, &QPushButton::clicked, this, [this, swatchButton, settingsKey]() {
+        const QColor picked = QColorDialog::getColor(
+            QColor(currentColorHex(settingsKey)), this, "Choose Color");
+        if (!picked.isValid())
+            return;
+        QSettings().setValue(settingsKey, picked.name());
+        notifyColorChanged(settingsKey);
+    });
+    connect(resetButton, &QPushButton::clicked, this, [this, settingsKey]() {
+        QSettings().remove(settingsKey);
+        notifyColorChanged(settingsKey);
+    });
+
+    m_colorSwatchButtons.append({swatchButton, settingsKey});
+    return row;
+}
+
+void SettingsDialog::refreshLoadedModels()
+{
+    clearLoadedModelsList();
+    m_loadedModelsStatusLabel = new QLabel("Loading…");
+    m_loadedModelsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
+    m_loadedModelsLayout->addWidget(m_loadedModelsStatusLabel);
+
+    m_ollamaClient->fetchLoadedModels();
+}
+
+void SettingsDialog::onLoadedModelsListed(const QVector<LoadedModelInfo> &models)
+{
+    rebuildLoadedModelsList(models);
+}
+
+void SettingsDialog::onModelUnloaded(const QString &model, bool success)
+{
+    Q_UNUSED(model);
+    Q_UNUSED(success);
+    // Whatever just changed, the loaded-model list is now stale either way —
+    // simplest correct behavior is just to re-fetch it.
+    refreshLoadedModels();
+}
+
+void SettingsDialog::clearLoadedModelsList()
+{
+    QLayoutItem *item;
+    while ((item = m_loadedModelsLayout->takeAt(0)) != nullptr) {
+        if (item->widget())
+            item->widget()->deleteLater();
+        delete item;
+    }
+    m_loadedModelsStatusLabel = nullptr;
+}
+
+void SettingsDialog::rebuildLoadedModelsList(const QVector<LoadedModelInfo> &models)
+{
+    clearLoadedModelsList();
+
+    if (models.isEmpty()) {
+        m_loadedModelsStatusLabel = new QLabel("No models currently loaded.");
+        m_loadedModelsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
+        m_loadedModelsLayout->addWidget(m_loadedModelsStatusLabel);
+        return;
+    }
+
+    for (const LoadedModelInfo &info : models) {
+        auto *row = new QWidget;
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+
+        const QString sizeText = info.sizeVramBytes > 0
+            ? QString(" — %1 GB VRAM").arg(info.sizeVramBytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 1)
+            : QString();
+        auto *nameLabel = new QLabel(info.name + sizeText);
+        nameLabel->setStyleSheet("font-weight: normal;");
+        rowLayout->addWidget(nameLabel, /*stretch=*/1);
+
+        auto *offloadButton = new QPushButton("Offload");
+        connect(offloadButton, &QPushButton::clicked, this, [this, name = info.name]() {
+            m_ollamaClient->unloadModel(name);
+        });
+        rowLayout->addWidget(offloadButton);
+
+        m_loadedModelsLayout->addWidget(row);
+    }
+}
