@@ -710,6 +710,16 @@ QString Theme::styleSheet(bool dark)
 
 QString Theme::colorToken(const QString &tokenName, bool dark)
 {
+    // "accent" specifically has to go through currentAccentColor() rather
+    // than the raw table — styleSheet() already substitutes {{accent}} with
+    // the custom "appearance/accentColor" override (if any) when building
+    // the app's QSS, but loadThemedIcon() calls this directly to recolor
+    // SVGs, bypassing that substitution entirely. Without this, any icon
+    // colored via the "accent" token (the send button's plane icon,
+    // web-search/thinking toggle icons, etc.) would silently ignore a
+    // custom Application color and always show the theme's built-in default.
+    if (tokenName == QLatin1String("accent"))
+        return currentAccentColor(dark);
     return tokenTable(dark).value(tokenName);
 }
 
