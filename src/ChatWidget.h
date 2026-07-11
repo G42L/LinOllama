@@ -360,6 +360,16 @@ private:
         qint64 startMs = 0;      // wall-clock time of the first content token, for tok/s
         int tokenCount = 0;
         double lastTokensPerSecond = 0.0;
+        // Context tokens used as of just before this turn started (i.e.
+        // whatever m_usedTokensByConversation already held) — Ollama only
+        // reports the real prompt_eval_count/eval_count once the turn is
+        // fully done, so onChatDelta() uses baselineUsedTokens + tokenCount
+        // as a live running estimate in the meantime (same "one content
+        // delta ~= one token" approximation tok/s already uses), letting
+        // the context-usage bar/label update live instead of sitting frozen
+        // at the previous turn's number until this one finishes. Corrected
+        // to the exact real number by onChatUsage() either way.
+        int baselineUsedTokens = 0;
     };
     QHash<QString, StreamState> m_streams;
 

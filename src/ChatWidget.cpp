@@ -1045,6 +1045,7 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
     // exist — sending a new turn only happens once the previous one for
     // this conversation has finished/been stopped).
     m_streams[conversationId] = StreamState();
+    m_streams[conversationId].baselineUsedTokens = m_usedTokensByConversation.value(conversationId, 0);
     m_streamingThinkingWidget = nullptr;
     m_streamingBrowser = appendMessageBubble("assistant", QString(), &m_streamingBubbleLayout);
     setInputEnabled(false);
@@ -1225,6 +1226,13 @@ void ChatWidget::onChatDelta(const QString &conversationId, const QString &token
         st.lastTokensPerSecond = st.tokenCount / (elapsedMs / 1000.0);
         m_lastTokensPerSecondByConversation[conversationId] = st.lastTokensPerSecond;
     }
+
+    // Same live-estimate approach as tok/s just above: the context-usage
+    // bar/label would otherwise sit frozen at the previous turn's total for
+    // this whole reply, only jumping to the real number once onChatUsage()
+    // arrives at the very end. baselineUsedTokens + tokenCount is corrected
+    // to the exact real prompt_eval_count/eval_count either way once it does.
+    m_usedTokensByConversation[conversationId] = st.baselineUsedTokens + st.tokenCount;
 
     st.buffer += tokenText;
 
