@@ -30,6 +30,7 @@ class QMenu;
 class QAction;
 class ThinkingSectionWidget;
 class ThemeManager;
+class QTimer;
 
 // Displays the active conversation and handles sending messages + streaming
 // the assistant's reply in. Does not own OllamaClient/ConversationStore —
@@ -174,6 +175,13 @@ private slots:
     // and streamAssistantReplyForCurrentHistory() for how turns get there.
     void onQueueTurnStarted(const QString &conversationId);
     void onQueuePositionChanged(const QString &conversationId, int aheadCount);
+
+    // Fires at a fixed ~20 Hz cadence while streaming (see onChatDelta()) to
+    // actually do the expensive part — re-rendering the bubble text,
+    // scrolling, refreshing the context-usage bar — instead of doing all of
+    // that on every single token. A no-op if nothing changed since the last
+    // flush (m_streamRenderDirty).
+    void flushStreamRender();
 
 private:
     // A file queued via the "+" button, not yet attached to a sent message.
@@ -372,6 +380,19 @@ private:
         int baselineUsedTokens = 0;
     };
     QHash<QString, StreamState> m_streams;
+
+    // Throttles onChatDelta()'s UI work (see flushStreamRender()) — without
+    // this, a fast/long reply calls setMarkdownWithHtmlBlocks() (a full
+    // Markdown-to-rich-text re-parse of the *entire* accumulated reply so
+    // far, from scratch, since Qt has no incremental-append API for it) on
+    // every single token, which is O(current reply length) per call and
+    // therefore O(reply length squared) in total by the time a long reply
+    // finishes — that's what made the UI visibly bog down on long outputs.
+    // Capping actual render work to a fixed ~20 Hz cadence instead bounds
+    // the number of full re-renders by wall-clock time rather than token
+    // count, independent of how fast or long the reply is.
+    QTimer *m_streamRenderTimer = nullptr;
+    bool m_streamRenderDirty = false;
 
     QString m_activeConversationId;
     // Live widgets for m_activeConversationId's own entry in m_streams, if

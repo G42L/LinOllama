@@ -285,6 +285,11 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     connect(m_ollamaClient, &OllamaClient::modelContextLengthFetched,
             this, &ChatWidget::onModelContextLengthFetched);
 
+    m_streamRenderTimer = new QTimer(this);
+    m_streamRenderTimer->setInterval(50); // ~20 Hz — see the member's own comment
+    m_streamRenderTimer->setSingleShot(true);
+    connect(m_streamRenderTimer, &QTimer::timeout, this, &ChatWidget::flushStreamRender);
+
     m_chatQueue = new ChatQueue(m_ollamaClient, this);
     m_chatQueue->setOptimizeModelSwaps(QSettings().value("chat/modelOptimization", false).toBool());
     connect(m_chatQueue, &ChatQueue::turnStarted, this, &ChatWidget::onQueueTurnStarted);
@@ -901,6 +906,9 @@ void ChatWidget::abortActiveStreamIfAny()
 
     m_chatQueue->cancel(conversationId); // no-ops on OllamaClient if this turn was still queued, not yet running
 
+    m_streamRenderTimer->stop();
+    m_streamRenderDirty = false;
+
     // Neither OllamaClient::abortChat() nor a still-queued cancel() emits
     // chatDone()/chatError() (see OllamaClient's header), so this replicates
     // onChatDone()'s cleanup directly. Whatever had already streamed in
@@ -1246,8 +1254,31 @@ void ChatWidget::onChatDelta(const QString &conversationId, const QString &token
     if (conversationId != m_activeConversationId)
         return;
 
-    if (m_streamingBrowser)
+    // The actual render work happens in flushStreamRender(), at a capped
+    // rate — see m_streamRenderTimer's own comment. Only arming it when
+    // it's not already running (rather than restarting it every token, i.e.
+    // debouncing) is what gives a fixed ~20 Hz cadence regardless of how
+    // fast tokens are arriving, instead of a timer that keeps getting
+    // pushed back and never actually fires until tokens stop.
+    m_streamRenderDirty = true;
+    if (!m_streamRenderTimer->isActive())
+        m_streamRenderTimer->start();
+}
+
+void ChatWidget::flushStreamRender()
+{
+    if (!m_streamRenderDirty)
+        return;
+    m_streamRenderDirty = false;
+
+    // Re-reads the active conversation's current stream state fresh, rather
+    // than capturing anything from whenever the timer was armed — any
+    // number of onChatDelta() calls could have landed in between, and this
+    // always renders whatever's accumulated as of right now.
+    if (m_streamingBrowser) {
+        const StreamState &st = m_streams[m_activeConversationId];
         m_streamingBrowser->setMarkdownWithHtmlBlocks(livePreviewText(st.buffer));
+    }
     scrollToBottom();
     updateContextUsageDisplay();
 }
@@ -1261,6 +1292,14 @@ void ChatWidget::onChatDone(const QString &conversationId)
 
     if (conversationId != m_activeConversationId)
         return; // background turn finished; its bubble will render as static/final next time this conversation is shown
+
+    // Nothing left to coalesce now that the reply is done, and the final
+    // render just below is unconditional either way — stopping this avoids
+    // a stray flushStreamRender() firing right after m_streamingBrowser is
+    // cleared below (harmless — it guards on that being non-null — but
+    // pointless work all the same).
+    m_streamRenderTimer->stop();
+    m_streamRenderDirty = false;
 
     if (m_streamingThinkingWidget)
         m_streamingThinkingWidget->setThinking(false);
@@ -1287,6 +1326,9 @@ void ChatWidget::onChatError(const QString &conversationId, const QString &messa
 
     if (conversationId != m_activeConversationId)
         return; // background turn failed; whatever it streamed before failing is already persisted
+
+    m_streamRenderTimer->stop();
+    m_streamRenderDirty = false;
 
     appendMessageBubble("error", message);
 
