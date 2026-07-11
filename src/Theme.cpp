@@ -156,6 +156,30 @@ QComboBox:hover {
     border: 1px solid {{accent}};
 }
 
+/* Fusion's native drop-down subcontrol is a plain rectangle — left
+   unstyled, it pokes hard right-angle corners out past the combo box's own
+   rounded {{border-radius}} on the right edge. Matching its own top/bottom-
+   right radius to the box's is what actually fixes that, not just a
+   transparent background (which alone still leaves square corners). Doing
+   this at all *does* turn off Fusion's built-in arrow glyph (a Qt
+   stylesheet quirk — styling ::drop-down opts out of native painting for
+   it), which is what the explicit ::down-arrow image right below is for. */
+QComboBox::drop-down {
+    border: none;
+    background-color: transparent;
+    width: 20px;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+}
+
+QComboBox::down-arrow {
+    /* A solid filled triangle, not an outlined chevron — matches Fusion's
+       own filled menu-indicator glyph on #toolsButton right next to it. */
+    image: url(:/icons/dropdown-arrow.svg);
+    width: 10px;
+    height: 6px;
+}
+
 QComboBox QAbstractItemView {
     background-color: {{surface}};
     border: 1px solid {{border}};
@@ -511,17 +535,27 @@ QPushButton#editSaveButton:hover {
 /* Flattened to read as a toolbar item sitting next to the attach/send
    buttons, rather than a bordered form control — the generic QComboBox
    rule above still applies everywhere else (e.g. Settings dialog). */
+/* Matches #toolsButton right next to it — same flat/transparent idle look,
+   font size, padding, border-radius, and hover treatment, rather than the
+   generic bordered-box QComboBox styling above. */
 #modelCombo {
     background-color: transparent;
     border: none;
+    border-radius: 8px;
     color: {{secondaryText}};
-    padding: 4px 6px;
+    font-size: 12px;
+    padding: 4px 18px 4px 10px;
 }
 
 #modelCombo:hover {
     background-color: {{menuButtonHoverBg}};
-    border-radius: 8px;
+    color: {{text}};
 }
+
+/* No #modelCombo-specific ::drop-down/::down-arrow rule needed — the
+   generic QComboBox::drop-down/::down-arrow rules above already apply here
+   too (an ID selector doesn't stop a plain-type selector from matching the
+   same widget), and this box's own border-radius happens to match theirs. */
 
 /* Flat, like the attach/tools/voice buttons it sits alongside — no filled
    pill behind it. {{accent}} text/icon color is what keeps it visually
