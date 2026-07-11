@@ -523,6 +523,7 @@ AutoHeightTextBrowser *ChatWidget::appendMessageBubble(const QString &role, cons
     const bool isError = (role == "error");
 
     auto *row = new QWidget;
+    row->setObjectName("messageRow");
     auto *rowLayout = new QHBoxLayout(row);
     rowLayout->setContentsMargins(0, 0, 0, 0);
 

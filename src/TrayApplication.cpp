@@ -101,6 +101,19 @@ void TrayApplication::buildMenu()
 
     m_offloadMenu = m_menu.addMenu("Offload model");
     connect(m_offloadMenu, &QMenu::aboutToShow, this, &TrayApplication::onOffloadMenuAboutToShow);
+    // Some native tray backends (system tray icons are typically rendered
+    // by the desktop environment itself over DBusMenu/StatusNotifierItem,
+    // not painted by Qt) serialize the whole menu tree once when the
+    // top-level tray menu opens, and don't reliably forward a *nested*
+    // submenu's own lazy aboutToShow back to the app afterward — which
+    // left "Offload model" stuck empty/on "Loading…" on some desktops even
+    // though the same fetch works fine from Settings (which fetches
+    // eagerly on open, with no dependency on a hover event at all). Also
+    // triggering the fetch off the top-level menu's own aboutToShow — which
+    // every backend has to support, since that's how the menu gets shown
+    // at all — means the submenu already has fresh data by the time it's
+    // opened, regardless of whether its own aboutToShow round-trips.
+    connect(&m_menu, &QMenu::aboutToShow, this, &TrayApplication::onOffloadMenuAboutToShow);
 
     m_openAction = m_menu.addAction("Open Ollama GUI", this, [this]() {
         if (!m_mainWindow)

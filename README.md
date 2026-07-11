@@ -11,8 +11,9 @@ desktop client, in the spirit of Claude Desktop's look and feel.
 |------------|------------|
 | ![Light Theme](doc/images/light-theme.png) | ![Dark Theme](doc/images/dark-theme.png) |using the dark theme. |
 
-Chat View
-![chat view](doc/images/chat-view.png)
+| Chat view colapsed | Chat view expanded |
+|--------------------|--------------------|
+| ![chat view](doc/images/chat-view.png) | ![chat view expanded](doc/images/chat-view-full.png) |
 
 ## Features
 
@@ -104,6 +105,7 @@ Chat View
 - Choice of Send button style (paper-plane icon, arrow, or text label).
 - Themed app icon (tray, window/taskbar, and every dialog) that follows the
   active theme — black on light, light-on-dark — rather than a fixed color.
+- Some icons are originaly from [System UI Line icon pack](https://www.svgrepo.com/collection/system-ui-line-icons)
 
 ## Requirements
 

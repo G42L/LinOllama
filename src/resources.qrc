@@ -8,5 +8,8 @@
         <file>icons/stop.svg</file>
         <file>icons/edit.svg</file>
         <file>icons/retry.svg</file>
+        <file>icons/new-chat.svg</file>
+        <file>icons/sidebar-collapse.svg</file>
+        <file>icons/sidebar-expand.svg</file>
     </qresource>
 </RCC>

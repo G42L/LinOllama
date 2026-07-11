@@ -22,6 +22,13 @@ ConversationListItemWidget::ConversationListItemWidget(const QString &conversati
     // to show before the first layout pass.
     m_titleLabel = new QLabel(title);
     m_titleLabel->setObjectName("conversationTitle");
+    // A QLabel's default minimumSizeHint() is based on its full (un-elided)
+    // text, which would otherwise stop the layout from ever actually
+    // shrinking it below that — defeating updateElidedTitle() even once
+    // this widget's own width is correct. 0 lets the layout shrink it
+    // freely; the label's own displayed text is what actually controls how
+    // much room it visually needs.
+    m_titleLabel->setMinimumWidth(0);
     layout->addWidget(m_titleLabel, /*stretch=*/1);
 
     m_menuButton = new QToolButton;

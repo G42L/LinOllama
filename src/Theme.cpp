@@ -46,6 +46,14 @@ QToolTip {
     border-radius: 4px;
 }
 
+/* --- Window top bar ----------------------------------------------------
+   Sits above the sidebar/chat/stats splitter — holds the sidebar
+   collapse/expand toggle, which has to stay reachable even once the
+   sidebar itself is fully hidden (see MainWindow::setSidebarCollapsed()). */
+#windowTopBar {
+    background-color: {{bg}};
+}
+
 /* --- Sidebar ---------------------------------------------------------- */
 #sidebar {
     background-color: {{sidebarBg}};
@@ -108,18 +116,6 @@ QListWidget::item:hover:!selected {
     font-size: 11px;
 }
 
-QPushButton#newConversationButton {
-    background-color: {{surface}};
-    border: 1px solid {{border}};
-    border-radius: 8px;
-    padding: 6px 12px;
-    text-align: left;
-}
-
-QPushButton#newConversationButton:hover {
-    background-color: {{menuHoverBg}};
-}
-
 /* --- Generic buttons (dialog Cancel/Close, etc.) ----------------------- */
 QPushButton {
     background-color: {{surface}};
@@ -172,6 +168,17 @@ QComboBox QAbstractItemView {
 #messageScrollArea, #messagesContainer {
     background-color: {{surface}};
     border: none;
+}
+
+/* Each message's row (see ChatWidget::appendMessageBubble) is otherwise a
+   plain, objectName-less QWidget, which would fall back to the generic
+   app-wide {{bg}} rule above — a different shade than #messagesContainer's
+   own {{surface}} fill. That mismatch showed up as a visible square patch
+   behind every bubble's rounded corners (worst on the assistant bubble,
+   which has no fill of its own to hide it behind). Transparent lets the
+   container's own surface color show through with no seam, in both themes. */
+#messageRow {
+    background-color: transparent;
 }
 
 /* Homepage-style empty state: plain app background (not a filled panel —
