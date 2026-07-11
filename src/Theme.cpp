@@ -337,12 +337,26 @@ QSlider#meterSmoothingSlider::handle:horizontal {
     font-size: 12px;
     border: none;
     border-radius: 8px;
-    padding: 4px 10px;
+    /* Extra right padding makes room for the menu-indicator arrow below so
+       it doesn't overlap "Tools"'s own text. */
+    padding: 4px 18px 4px 10px;
 }
 
 #toolsButton:hover {
     background-color: {{menuButtonHoverBg}};
     color: {{text}};
+}
+
+/* Fusion's default QToolButton::menu-indicator (the little dropdown arrow
+   Qt draws automatically once a QMenu is set via setMenu()) anchors to the
+   bottom-right corner by default — sensible for a toolbar button whose
+   main content is a big icon with the arrow tucked in a corner below it,
+   but this button is just a single line of text, so that read as the arrow
+   sitting at the bottom instead of centered next to "Tools". Explicitly
+   centering it vertically on the right fixes that. */
+#toolsButton::menu-indicator {
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
 }
 
 /* At least one tool (web search / no-thinking) is active — see
