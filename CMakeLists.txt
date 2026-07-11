@@ -27,6 +27,8 @@ add_executable(ollama-tray
     src/WhisperManager.h
     src/MapEmbedWidget.cpp
     src/MapEmbedWidget.h
+    src/HtmlEmbedWidget.cpp
+    src/HtmlEmbedWidget.h
     src/ServerController.cpp
     src/ServerController.h
     src/Conversation.h

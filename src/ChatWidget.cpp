@@ -735,6 +735,31 @@ AutoHeightTextBrowser *ChatWidget::appendMessageBubble(const QString &role, cons
 
 void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLayout *bubbleLayout, const QString &content)
 {
+    // ```html blocks are pulled out and rendered via a real Chromium view
+    // (HtmlEmbedWidget) rather than left for AutoHeightTextBrowser's own
+    // static-subset ```html handling — that has no JavaScript engine and no
+    // <canvas>, so anything script-driven (Chart.js, D3, etc.) rendered as
+    // inert markup there. This is done first, ahead of the ```map
+    // extraction below, so both fence types can appear in the same reply.
+    static const QRegularExpression htmlFence(
+        QStringLiteral("```html\\s*\\n(.*?)```"),
+        QRegularExpression::DotMatchesEverythingOption);
+
+    QVector<QString> htmlBlocks;
+    QString withoutHtml;
+    withoutHtml.reserve(content.size());
+    {
+        int lastEnd = 0;
+        QRegularExpressionMatchIterator it = htmlFence.globalMatch(content);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch match = it.next();
+            withoutHtml += content.mid(lastEnd, match.capturedStart() - lastEnd);
+            htmlBlocks.append(match.captured(1));
+            lastEnd = match.capturedEnd();
+        }
+        withoutHtml += content.mid(lastEnd);
+    }
+
     static const QRegularExpression mapFence(
         QStringLiteral("```map\\s*\\n(.*?)```"),
         QRegularExpression::DotMatchesEverythingOption);
@@ -747,12 +772,12 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
     QVector<MapBlockSpec> mapBlocks;
 
     QString textOnly;
-    textOnly.reserve(content.size());
+    textOnly.reserve(withoutHtml.size());
     int lastEnd = 0;
-    QRegularExpressionMatchIterator it = mapFence.globalMatch(content);
+    QRegularExpressionMatchIterator it = mapFence.globalMatch(withoutHtml);
     while (it.hasNext()) {
         const QRegularExpressionMatch match = it.next();
-        textOnly += content.mid(lastEnd, match.capturedStart() - lastEnd);
+        textOnly += withoutHtml.mid(lastEnd, match.capturedStart() - lastEnd);
         lastEnd = match.capturedEnd();
 
         const QJsonObject obj = QJsonDocument::fromJson(match.captured(1).trimmed().toUtf8()).object();
@@ -760,17 +785,38 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
         if (!query.isEmpty())
             mapBlocks.append({query, obj.value("zoom").toInt(12)});
     }
-    textOnly += content.mid(lastEnd);
+    textOnly += withoutHtml.mid(lastEnd);
 
+    // No ```html fence survives into textOnly (already extracted above), so
+    // this is effectively plain Markdown rendering now — still routed
+    // through setMarkdownWithHtmlBlocks() rather than setMarkdown() in case
+    // a model ever nests one inside e.g. a code fence in a way the regex
+    // above doesn't catch; harmless either way since it's a no-op when
+    // there's nothing left for it to find.
     browser->setMarkdownWithHtmlBlocks(textOnly);
 
-    // A ```html reply is rendered through Qt's rich-text HTML subset, which
-    // silently drops/reinterprets anything outside it (see
-    // AutoHeightTextBrowser's own comments — no JS, inline <svg> gets
-    // rewritten to an <img>, etc.) — this toggle is what lets someone check
-    // what the model actually produced versus what ended up on screen.
-    // Plain-Markdown replies never get one; there'd be nothing to compare.
-    if (AutoHeightTextBrowser::containsHtmlBlock(textOnly)) {
+    QVector<QWidget *> htmlWidgets;
+    htmlWidgets.reserve(htmlBlocks.size());
+    for (const QString &html : htmlBlocks) {
+        auto *embed = new HtmlEmbedWidget(html);
+        bubbleLayout->addWidget(embed);
+        htmlWidgets.append(embed);
+    }
+
+    for (const MapBlockSpec &spec : mapBlocks)
+        bubbleLayout->addWidget(new MapEmbedWidget(spec.query, spec.zoom));
+
+    // Lets someone check what the model actually produced (including the
+    // literal ```html source) versus the rendered/live result — only shown
+    // when there's actually an html block to compare against; a plain-
+    // Markdown or map-only reply has nothing a raw view would add.
+    if (!htmlBlocks.isEmpty()) {
+        auto *rawBrowser = new AutoHeightTextBrowser;
+        rawBrowser->setObjectName("bubbleText");
+        rawBrowser->setPlainText(content);
+        rawBrowser->setVisible(false);
+        bubbleLayout->insertWidget(bubbleLayout->indexOf(browser) + 1, rawBrowser);
+
         auto *toggleRow = new QWidget;
         auto *toggleLayout = new QHBoxLayout(toggleRow);
         toggleLayout->setContentsMargins(0, 4, 0, 0);
@@ -782,22 +828,18 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
         toggleButton->setCheckable(true);
         toggleButton->setCursor(Qt::PointingHandCursor);
         toggleButton->setAutoRaise(true);
-        connect(toggleButton, &QToolButton::toggled, browser, [browser, textOnly, toggleButton](bool showRaw) {
-            if (showRaw) {
-                browser->setPlainText(textOnly);
-                toggleButton->setText("View rendered");
-            } else {
-                browser->setMarkdownWithHtmlBlocks(textOnly);
-                toggleButton->setText("View source");
-            }
+        connect(toggleButton, &QToolButton::toggled, browser,
+                [browser, rawBrowser, htmlWidgets, toggleButton](bool showRaw) {
+            browser->setVisible(!showRaw);
+            for (QWidget *w : htmlWidgets)
+                w->setVisible(!showRaw);
+            rawBrowser->setVisible(showRaw);
+            toggleButton->setText(showRaw ? "View rendered" : "View source");
         });
         toggleLayout->addWidget(toggleButton);
 
         bubbleLayout->addWidget(toggleRow);
     }
-
-    for (const MapBlockSpec &spec : mapBlocks)
-        bubbleLayout->addWidget(new MapEmbedWidget(spec.query, spec.zoom));
 }
 
 void ChatWidget::scrollToBottom()

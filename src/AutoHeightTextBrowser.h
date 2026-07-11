@@ -33,8 +33,13 @@ public:
     //
     // Scope note: this rides on QTextBrowser's built-in HTML support, which
     // is a static HTML4/CSS2.1-ish subset — no JavaScript, no live
-    // embeds/iframes, no interactive maps or canvases (see MapEmbedWidget
-    // for those). It can render structure and styling, not run a web app.
+    // embeds/iframes, no interactive maps or canvases. ChatWidget now
+    // extracts ```html blocks out *before* ever reaching this method for a
+    // finalized reply, routing each one to a real Chromium view instead
+    // (see HtmlEmbedWidget) — so in practice this splicing path only still
+    // runs for a message still actively streaming in, where the live
+    // preview stays static until the reply finishes and gets re-rendered
+    // through HtmlEmbedWidget. MapEmbedWidget is the equivalent for ```map.
     void setMarkdownWithHtmlBlocks(const QString &content);
 
     // True if `content` contains at least one ```html fenced block — used

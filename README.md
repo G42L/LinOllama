@@ -65,10 +65,12 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   **"Send automatically after transcription"** switches to sending it
   straight to Ollama with no review step. See "Voice transcription" below
   for setup.
-- **Rich replies**: fenced ` ```html ` blocks render as real HTML (including
-  inline SVG, auto-converted so Qt's renderer doesn't silently drop it) and
-  remote `<img>` URLs load asynchronously; fenced ` ```map ` blocks (`{"query":
-  "...", "zoom": N}`) render as an embedded Google Maps view.
+- **Rich replies**: fenced ` ```html ` blocks render in a real, isolated
+  Chromium view (JavaScript, `<canvas>`, CSS3 — Chart.js-style charts and
+  similar just work), with a "View source" toggle to see the model's
+  original raw reply instead; remote `<img>` URLs elsewhere in a reply load
+  asynchronously; fenced ` ```map ` blocks (`{"query": "...", "zoom": N}`)
+  render as an embedded Google Maps view.
 - **Context-window usage bar** between the message list and the input box,
   showing tokens used vs. the model's real context length (fetched from
   Ollama, not guessed).

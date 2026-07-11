@@ -21,6 +21,7 @@
 #include "VoiceRecorder.h"
 #include "WhisperManager.h"
 #include "MapEmbedWidget.h"
+#include "HtmlEmbedWidget.h"
 
 class QVBoxLayout;
 class QHBoxLayout;
@@ -223,14 +224,21 @@ private:
                                                 const QStringList &attachmentNames = {},
                                                 int messageIndex = -1,
                                                 const QDateTime &timestamp = QDateTime());
-    // Strips ```map fenced block(s) (JSON: {"query": "...", "zoom": N}) out
-    // of `content`, renders the remaining text into `browser` via
-    // setMarkdownWithHtmlBlocks(), then appends one MapEmbedWidget per block
-    // to `bubbleLayout` — landing after browser, since QVBoxLayout::
-    // addWidget() always appends, and browser is expected to already be the
-    // last item in bubbleLayout when this is called (true both for a fresh
-    // bubble and for upgrading a just-finished streaming one in
-    // onChatDone()). No map block present is just the normal-render case.
+    // Strips ```html fenced block(s) out of `content` first — each one
+    // becomes its own HtmlEmbedWidget (a real, isolated Chromium view;
+    // AutoHeightTextBrowser's own HTML support has no JavaScript/<canvas>,
+    // so anything script-driven needs this instead) — then ```map fenced
+    // block(s) (JSON: {"query": "...", "zoom": N}) out of what's left,
+    // renders the remaining text into `browser` via
+    // setMarkdownWithHtmlBlocks(), and appends one MapEmbedWidget per map
+    // block to `bubbleLayout` — landing after browser and any html embeds,
+    // since QVBoxLayout::addWidget() always appends, and browser is
+    // expected to already be the last item in bubbleLayout when this is
+    // called (true both for a fresh bubble and for upgrading a
+    // just-finished streaming one in onChatDone()). Also adds a "View
+    // source" toggle when there's at least one html block, letting it
+    // swap between the rendered/live view and the original raw reply text.
+    // No html/map block present is just the normal-render case.
     void renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLayout *bubbleLayout, const QString &content);
     void setInputEnabled(bool enabled);
     void scrollToBottom();
