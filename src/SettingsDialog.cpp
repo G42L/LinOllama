@@ -259,6 +259,23 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     auto *whisperGroup = new QGroupBox("Voice transcription (Whisper)");
     auto *whisperLayout = new QVBoxLayout(whisperGroup);
 
+    m_voiceAutoSendCheck = new QCheckBox("Send automatically after transcription");
+    const bool voiceAutoSend = QSettings().value("chat/voiceAutoSend", false).toBool();
+    m_voiceAutoSendCheck->setChecked(voiceAutoSend);
+    connect(m_voiceAutoSendCheck, &QCheckBox::toggled,
+            this, &SettingsDialog::onVoiceAutoSendToggled);
+    whisperLayout->addWidget(m_voiceAutoSendCheck);
+
+    auto *voiceAutoSendHint = new QLabel(
+        "Off (default): the transcribed text fills the message box so you can review or correct it "
+        "before sending. On: it's sent to Ollama immediately, with no chance to fix a "
+        "misheard word first.");
+    voiceAutoSendHint->setWordWrap(true);
+    voiceAutoSendHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    whisperLayout->addWidget(voiceAutoSendHint);
+
+    whisperLayout->addSpacing(10); // visual break before the binary/model-location controls below
+
     m_whisperStatusLabel = new QLabel;
     m_whisperStatusLabel->setWordWrap(true);
     m_whisperStatusLabel->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
@@ -379,6 +396,12 @@ void SettingsDialog::onSendButtonFilledToggled(bool filled)
 {
     QSettings().setValue("chat/sendButtonFilled", filled);
     emit sendButtonFilledChanged(filled);
+}
+
+void SettingsDialog::onVoiceAutoSendToggled(bool enabled)
+{
+    QSettings().setValue("chat/voiceAutoSend", enabled);
+    emit voiceAutoSendChanged(enabled);
 }
 
 void SettingsDialog::onContextLengthEnabledToggled(bool enabled)

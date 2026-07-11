@@ -218,6 +218,8 @@ void MainWindow::onSettingsRequested()
             m_chatWidget, &ChatWidget::setSendButtonStyle);
     connect(&dialog, &SettingsDialog::sendButtonFilledChanged,
             m_chatWidget, &ChatWidget::setSendButtonFilled);
+    connect(&dialog, &SettingsDialog::voiceAutoSendChanged,
+            m_chatWidget, &ChatWidget::setVoiceAutoSend);
     connect(&dialog, &SettingsDialog::statsColorsChanged,
             m_statsStrip, &StatsStripWidget::applyMeterColors);
     connect(&dialog, &SettingsDialog::contextLengthSettingChanged,

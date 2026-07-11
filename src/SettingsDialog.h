@@ -46,6 +46,14 @@ signals:
     // voice buttons. true: the button's original solid accent-colored pill.
     void sendButtonFilledChanged(bool filled);
 
+    // Emitted whenever the "Send automatically after transcription"
+    // checkbox changes — ChatWidget listens live. false (default): the
+    // transcribed text fills the message box for review/correction before
+    // sending. true: it's sent immediately, same as the very first
+    // implementation of this feature did. Persistence to QSettings
+    // ("chat/voiceAutoSend") already happened by the time this fires.
+    void voiceAutoSendChanged(bool enabled);
+
     // Emitted whenever any color (Application or a stats meter) is changed
     // or individually reset to default — StatsStripWidget listens live
     // (same pattern as sendButtonStyleChanged above). Persistence to
@@ -90,6 +98,7 @@ private slots:
     void onChangeWhisperBinaryClicked();
     void onChangeWhisperModelsDirClicked();
     void onWhisperExpandToggleClicked();
+    void onVoiceAutoSendToggled(bool enabled);
 
     void onAudioInputComboChanged(int index);
     void refreshAudioInputCombo();
@@ -127,6 +136,7 @@ private:
 
     WhisperManager *m_whisperManager = nullptr;
     QLabel *m_whisperStatusLabel = nullptr;
+    QCheckBox *m_voiceAutoSendCheck = nullptr; // "Send automatically after transcription" — see voiceAutoSendChanged()
     QTableWidget *m_whisperModelsTable = nullptr;
     QToolButton *m_whisperExpandButton = nullptr;
     // Minimal (default): Model/Speed/Accuracy/action only, with disk size,

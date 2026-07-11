@@ -256,6 +256,10 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     // Restores the background style (see SettingsDialog's "Filled send
     // button" checkbox) — defaults to flat/off, matching the new look.
     setSendButtonFilled(QSettings().value("chat/sendButtonFilled", false).toBool());
+    // Restores "Send automatically after transcription" (see SettingsDialog) —
+    // defaults to off, so a transcription lands in the box for review rather
+    // than going straight to Ollama.
+    m_voiceAutoSend = QSettings().value("chat/voiceAutoSend", false).toBool();
 
     connect(&m_webSearchClient, &WebSearchClient::searchCompleted, this,
             [this](const QString &query, const QString &resultsText) {
@@ -351,6 +355,11 @@ void ChatWidget::setSendButtonFilled(bool filled)
     reloadSendButtonIcon();
     if (m_isGenerating)
         setSendButtonBusy(true); // re-picks the stop icon's color for the new background
+}
+
+void ChatWidget::setVoiceAutoSend(bool enabled)
+{
+    m_voiceAutoSend = enabled;
 }
 
 void ChatWidget::refreshContextLengthSetting()
@@ -1443,9 +1452,21 @@ void ChatWidget::onWhisperTranscriptionFinished(const QString &text, bool succes
         return;
     }
 
-    // Voice "trigger a send directly" rather than just filling the box.
     m_inputEdit->setPlainText(text);
-    onSendClicked();
+
+    if (m_voiceAutoSend) {
+        // Explicitly opted into this in Settings — the review step below is
+        // skipped on purpose.
+        onSendClicked();
+        return;
+    }
+
+    // Default: fills the box and hands focus back, but deliberately does
+    // NOT send — speech-to-text is error-prone enough that silently
+    // auto-submitting whatever it guessed was more surprising than helpful.
+    // The person can read it over, fix anything wrong, and hit Send themselves.
+    m_inputEdit->moveCursor(QTextCursor::End);
+    m_inputEdit->setFocus();
 }
 
 void ChatWidget::reloadThemedIcons()

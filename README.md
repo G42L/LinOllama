@@ -59,9 +59,12 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   folds the results into your message before sending.
 - **Voice button**: hold to record, release to transcribe (via a local
   [Whisper](https://github.com/ggerganov/whisper.cpp) model — nothing is
-  sent anywhere) and auto-send. The input box fills in live as text comes
-  back, not just once the whole recording is processed. See "Voice
-  transcription" below for setup.
+  sent anywhere). The input box fills in live as text comes back, not just
+  once the whole recording is processed. By default it's left in the box for
+  you to review/correct before hitting Send yourself; Settings →
+  **"Send automatically after transcription"** switches to sending it
+  straight to Ollama with no review step. See "Voice transcription" below
+  for setup.
 - **Rich replies**: fenced ` ```html ` blocks render as real HTML (including
   inline SVG, auto-converted so Qt's renderer doesn't silently drop it) and
   remote `<img>` URLs load asynchronously; fenced ` ```map ` blocks (`{"query":

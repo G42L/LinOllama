@@ -73,6 +73,12 @@ public:
     // "Filled send button" checkbox.
     void setSendButtonFilled(bool filled);
 
+    // Applies "Send automatically after transcription" live — see
+    // SettingsDialog's checkbox. false (default): onWhisperTranscriptionFinished()
+    // just fills the input box for review. true: it also calls
+    // onSendClicked() right away, same as this feature's original behavior.
+    void setVoiceAutoSend(bool enabled);
+
     // Re-reads "chat/useCustomContextLength"/"chat/customContextLength"
     // from QSettings and refreshes the context-usage bar accordingly —
     // called live when SettingsDialog's context-length checkbox/slider
@@ -385,6 +391,7 @@ private:
     QToolButton *m_attachButton = nullptr;
     QString m_sendButtonStyle = "plane"; // "plane" | "arrow" | "text" — see setSendButtonStyle()
     bool m_sendButtonFilled = false; // false = flat (default), true = classic accent pill — see setSendButtonFilled()
+    bool m_voiceAutoSend = false; // false = fill box for review (default), true = send immediately — see setVoiceAutoSend()
 
     // "Tools" dropdown (right of the attach button): checkable Search-the-web
     // and Thinking toggles. Persistent QMenu (not rebuilt per click, unlike
