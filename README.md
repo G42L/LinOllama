@@ -167,6 +167,22 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   downmixed to mono, resampled to the exact 16 kHz/16-bit PCM whisper.cpp
   requires, and written to a temp WAV on a RAM-backed `tmpfs` (`/dev/shm`)
   when available — deleted immediately after transcription, win or lose.
+- **Live transcription while still talking**, if a `whisper-server` binary
+  (a second binary from the same whisper.cpp checkout, built from its
+  `examples/server`) is found — Settings → Voice transcription shows
+  whether it was, with a button to point at one manually. When available,
+  it's used automatically: `whisper-server` loads the model once and stays
+  warm, and the recording is sliced into chunks at natural pauses in
+  speech (a short energy-threshold silence detector, not fixed time
+  windows, so words don't get cut mid-syllable at a chunk boundary; capped
+  at 8s so a long run-on sentence still gets transcribed periodically) and
+  streamed to the message box chunk by chunk as you talk, instead of
+  waiting until you release the button. Audio capture always takes
+  priority — a slow/backed-up chunk transcription never blocks or drops
+  captured audio, it just falls behind and catches up. Falls back to the
+  normal (transcribe-once-on-release) behavior above whenever
+  `whisper-server` isn't set up; `whisper-cli` alone reloads its whole
+  model on every invocation, too slow to re-run every few seconds.
 
 ### 🗔 Tray
 
@@ -234,6 +250,11 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   at least one `ggml-*.bin` model (Settings' model manager can do this part
   for you). Everything else in the app works fine without it; the voice
   button just reports it isn't configured yet.
+- **Optional, for *live* transcription while still talking**: additionally
+  build the `whisper-server` target from that same checkout
+  (`cmake --build build --target whisper-server` — it's whisper.cpp's own
+  `examples/server`). Without it, voice transcription still works exactly
+  as above, just on release rather than live.
 - Linux — GPU monitoring in particular is Linux-specific (sysfs, NVML via
   `dlopen`), and server control assumes systemd or a plain Unix process.
 
@@ -314,11 +335,16 @@ See Limitations if you move this checkout elsewhere afterward.
   (e.g. Brave Search) would need a user-supplied API key in Settings, which
   isn't built yet.
 - **Only built-in tools, no custom/user-defined ones.** Tool calling is
-  limited to the three tools ollama-tray ships with — there's no Settings
+  limited to the four tools ollama-tray ships with — there's no Settings
   UI yet for defining your own (e.g. a webhook-backed tool). A single turn
   also caps at 4 chained tool-call rounds before the app forces a final
   answer, as a guard against a model that keeps calling tools without ever
   actually answering.
+- **Live transcription's chunking isn't tunable.** The silence-detection
+  threshold and min/max chunk lengths (see "Voice transcription" above)
+  are fixed constants, not exposed in Settings — a very quiet room/mic
+  gain could in principle need a different threshold than the hardcoded
+  default to reliably detect pauses.
 - **No remote/non-default Ollama host setting.** The client can technically
   point at a different base URL, but there's no Settings UI to configure it
   yet — it's hardcoded to `http://127.0.0.1:11434`.
@@ -412,9 +438,12 @@ Single Qt6 Widgets application, no QML. Key files:
   one real Ollama server.
 - `OllamaClient` — thin wrapper over Ollama's REST API, multi-stream-capable.
 - `WhisperManager` — detects/configures `whisper-cli` and its models,
-  downloads new ones, and runs transcription as a subprocess.
+  downloads new ones, runs push-to-talk transcription as a subprocess, and
+  (if `whisper-server` is available) manages a persistent live-transcription
+  server process plus the HTTP chunk queue talking to it.
 - `VoiceRecorder` — raw microphone capture (push-to-talk), live level
-  metering, and 16 kHz mono WAV encoding for `WhisperManager`.
+  metering, 16 kHz mono WAV encoding for `WhisperManager`, and (in live
+  mode) silence-triggered chunk cutting.
 - `ConversationStore` — in-memory conversation list mirrored to per-file JSON.
 - `SystemMonitor` — CPU/RAM/GPU polling.
 - `ServerController` — detects and drives whichever mechanism (systemd

@@ -167,6 +167,18 @@ private slots:
     // transcriptionProgress(). Just fills the input box with whatever's been
     // transcribed so far, same as the final text does, minus the auto-send.
     void onWhisperTranscriptionProgress(const QString &partialText);
+
+    // Live transcription (see VoiceRecorder::liveChunkReady()/WhisperManager's
+    // whisper-server integration) — used instead of onVoiceRecordingFinished/
+    // onWhisperTranscriptionFinished whenever onVoicePressed() decided this
+    // recording should stream, rather than transcribing once at release.
+    void onVoiceLiveChunkReady(const QByteArray &wavData, bool isFinalChunk);
+    void onWhisperLiveChunkTranscribed(const QString &text, bool isFinalChunk, bool success, const QString &error);
+    // Surfaces a one-time error bubble if whisper-server fails to start —
+    // a quiet no-op on success, since onVoicePressed() doesn't block
+    // waiting for readiness before recording starts (the mic shouldn't feel
+    // laggy just because the server is still warming up).
+    void onWhisperLiveServerStateChanged(bool running, const QString &error);
     void onChatDelta(const QString &conversationId, const QString &tokenText);
     void onChatThinkingDelta(const QString &conversationId, const QString &tokenText);
     // Stashes toolCalls for onChatDone() (arrives just before it, from the
@@ -370,6 +382,15 @@ private:
     // what followed it, not the message itself) and regenerates the reply —
     // same prompt, new answer. Connected to each user bubble's "Retry" button.
     void retryMessage(int messageIndex);
+
+    // Auto-sends (if m_voiceAutoSend) once a live-mode recording's very
+    // last chunk has come back — the live-transcription counterpart of
+    // onWhisperTranscriptionFinished()'s own tail end. Doesn't otherwise
+    // touch the input box (each chunk already appended its own text as it
+    // arrived, via onWhisperLiveChunkTranscribed()), and doesn't disable/
+    // re-enable input either, since live mode never disables it in the
+    // first place — see onVoicePressed()'s own comment.
+    void finishLiveVoiceRecording();
 
     void updateToolsButtonAppearance();
     // Re-derives the web-search/thinking/microphone SVG icons for the

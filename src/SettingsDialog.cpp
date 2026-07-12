@@ -622,6 +622,14 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     auto *changeModelsDirButton = new QPushButton("Models folder…");
     connect(changeModelsDirButton, &QPushButton::clicked, this, &SettingsDialog::onChangeWhisperModelsDirClicked);
     whisperPathsRow->addWidget(changeModelsDirButton);
+    auto *changeServerBinaryButton = new QPushButton("Live server binary…");
+    changeServerBinaryButton->setToolTip(
+        "whisper-server — a separate binary from the same whisper.cpp checkout (built from its "
+        "examples/server), used only for live in-progress transcription while you're still "
+        "talking. Push-to-talk transcription on release works without it.");
+    connect(changeServerBinaryButton, &QPushButton::clicked,
+            this, &SettingsDialog::onChangeWhisperServerBinaryClicked);
+    whisperPathsRow->addWidget(changeServerBinaryButton);
     whisperPathsRow->addStretch(1);
     whisperLayout->addLayout(whisperPathsRow);
 
@@ -1082,9 +1090,15 @@ void SettingsDialog::refreshWhisperStatusLabel()
     const QString modelsDir = m_whisperManager->modelsDir().isEmpty()
         ? "(not set yet — pick one, or download a model to create a default)"
         : m_whisperManager->modelsDir();
+    // Live transcription just silently isn't available without this one —
+    // no separate on/off toggle to explain, so "found" vs. "not found" is
+    // the whole story here.
+    const QString liveStatus = m_whisperManager->isServerBinaryAvailable()
+        ? QString("found (%1) — live transcription while recording is on").arg(m_whisperManager->serverBinaryPath())
+        : "not found — live transcription while recording is off (push-to-talk still works)";
     m_whisperStatusLabel->setText(
-        QString("Binary: %1\nModels folder: %2")
-            .arg(m_whisperManager->binaryPath(), modelsDir));
+        QString("Binary: %1\nModels folder: %2\nLive server (whisper-server): %3")
+            .arg(m_whisperManager->binaryPath(), modelsDir, liveStatus));
 }
 
 void SettingsDialog::rebuildWhisperModelsTable()
@@ -1254,6 +1268,16 @@ void SettingsDialog::onChangeWhisperModelsDirClicked()
     m_whisperManager->setModelsDir(path);
     refreshWhisperStatusLabel();
     rebuildWhisperModelsTable();
+}
+
+void SettingsDialog::onChangeWhisperServerBinaryClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Select whisper-server binary", QDir::homePath());
+    if (path.isEmpty())
+        return;
+    m_whisperManager->setServerBinaryPath(path);
+    refreshWhisperStatusLabel();
 }
 
 void SettingsDialog::refreshAudioInputCombo()

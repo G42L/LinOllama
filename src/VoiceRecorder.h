@@ -37,7 +37,14 @@ class VoiceRecorder : public QObject
 public:
     explicit VoiceRecorder(QObject *parent = nullptr);
 
-    void startRecording();
+    // liveMode true additionally slices the recording into short chunks as
+    // it goes (see onCaptureReadyRead()'s silence-detection logic) and
+    // reports each one via liveChunkReady() instead of just accumulating
+    // silently until stopRecording() — used for live transcription (see
+    // ChatWidget). false (the default) is this class's original push-to-
+    // talk-only behavior: nothing is reported until stopRecording() hands
+    // back the whole recording as one file.
+    void startRecording(bool liveMode = false);
     void stopRecording();
 
     bool isRecording() const;
@@ -69,6 +76,13 @@ signals:
     // 0.0 when capture stops, so a listener never gets stuck on a stale level.
     void audioLevelChanged(qreal level);
 
+    // Live-mode only (see startRecording()) — one WAV-encoded chunk, ready
+    // to hand to WhisperManager::transcribeChunkLive(). isFinalChunk is set
+    // on the one emitted from stopRecording() covering whatever tail audio
+    // hadn't hit a chunk boundary yet (possibly empty, if the last boundary
+    // landed exactly at the button release) — never on the others.
+    void liveChunkReady(const QByteArray &wavData, bool isFinalChunk);
+
 private slots:
     void onCaptureReadyRead();
 
@@ -77,23 +91,47 @@ private:
     // it exists and is writable, else QStandardPaths::TempLocation.
     static QString pickOutputDir();
 
-    // Writes a minimal 16-bit PCM WAV file (44-byte header + raw samples) —
-    // Qt has no built-in WAV writer, and this format is simple enough not
-    // to need one.
+    // Builds a minimal 16-bit PCM WAV file's bytes (44-byte header + raw
+    // samples) in memory — Qt has no built-in WAV writer, and this format
+    // is simple enough not to need one. Shared by writeWavFile() (push-to-
+    // talk's whole-recording file) and flushLiveChunk() (live mode's
+    // in-memory chunks, which have nothing to gain from a disk round trip
+    // for what's usually a couple seconds of audio).
+    static QByteArray buildWavBytes(const QByteArray &pcm16Data, int sampleRate, int channels);
     static bool writeWavFile(const QString &path, const QByteArray &pcm16Data,
                               int sampleRate, int channels);
+    // Resamples whatever's accumulated in m_recordedMono since the last
+    // flush to 16 kHz mono 16-bit PCM and returns it as WAV bytes, clearing
+    // m_recordedMono and the silence-tracking state for the next chunk.
+    // Empty (zero-length QByteArray) if nothing had accumulated — still
+    // meaningful for isFinalChunk=true (an empty final chunk just means the
+    // last real chunk already covered everything up to the button release).
+    QByteArray flushLiveChunk(const QAudioFormat &format);
 
     QAudioDevice m_device;
     QAudioSource *m_source = nullptr;
     QIODevice *m_ioDevice = nullptr; // owned by m_source, not by this class
 
-    // Mono float samples at the device's own native rate, accumulated for
-    // the whole recording and only resampled to 16 kHz once, in
-    // stopRecording() — resampling incrementally per-buffer would
-    // accumulate more rounding error for no benefit, since nothing needs
-    // the resampled version until the recording is actually done.
+    // Mono float samples at the device's own native rate. In push-to-talk
+    // mode (m_liveMode == false), accumulated for the whole recording and
+    // only resampled to 16 kHz once, in stopRecording(). In live mode,
+    // accumulated only since the *last chunk boundary* — flushLiveChunk()
+    // clears it every time a chunk is cut, so it never holds more than one
+    // chunk's worth of audio at once.
     QVector<float> m_recordedMono;
     bool m_recording = false;
+    bool m_liveMode = false;
+
+    // How long (in seconds, native sample rate) the most recent run of
+    // near-silent audio has lasted — reset to 0 the moment a buffer isn't
+    // quiet, incremented by that buffer's duration when it is. Live mode
+    // cuts a chunk once this crosses kLiveSilenceCutSeconds *and* the
+    // chunk's already at least kLiveChunkMinSeconds long (so a quiet
+    // opening beat doesn't itself trigger a near-empty chunk), or
+    // unconditionally once the chunk hits kLiveChunkMaxSeconds regardless
+    // of silence (so a long run-on sentence with no pause still gets
+    // flushed periodically instead of never transcribing until release).
+    qreal m_liveSilenceSeconds = 0.0;
 
     // Same ballistics as before: fast rise toward a louder peak, slow decay
     // back down, so the meter has visible inertia instead of jittering with

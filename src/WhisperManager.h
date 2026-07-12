@@ -38,6 +38,11 @@ class WhisperManager : public QObject
 
 public:
     explicit WhisperManager(QObject *parent = nullptr);
+    // Explicitly stops whisper-server (if running) rather than relying on
+    // Qt's parent-child auto-deletion — see stopLiveServer()'s own comment;
+    // this is what makes sure the OS process is actually killed, not just
+    // left orphaned, when the app quits mid-live-transcription.
+    ~WhisperManager() override;
 
     // The fixed set of models Settings offers to download — a hand-picked
     // subset of everything whisper.cpp's own download script knows about
@@ -89,6 +94,48 @@ public:
     // than also checking a return value.
     void transcribe(const QString &wavPath);
 
+    // --- Live transcription (whisper-server) -------------------------------
+    // whisper-cli (above) reloads the whole model on every single
+    // invocation, which is fine for one push-to-talk recording but far too
+    // slow to re-run every few seconds while someone is still talking.
+    // whisper-server (a separate binary from the same whisper.cpp checkout,
+    // built from its examples/server) loads the model once and stays warm,
+    // answering HTTP requests — this section manages that process and talks
+    // to it, entirely separately from the whisper-cli path above.
+
+    // "whisper/serverBinaryPath" in QSettings — same override/autodetect
+    // pattern as binaryPath()/setBinaryPath(), just a different binary name
+    // ("whisper-server", falling back to the older "server" target name),
+    // searched in the same directory as binaryPath() plus the usual PATH/
+    // common-install-location candidates.
+    QString serverBinaryPath() const { return m_serverBinaryPath; }
+    void setServerBinaryPath(const QString &path);
+    bool isServerBinaryAvailable() const;
+
+    bool isLiveServerRunning() const { return m_serverProcess != nullptr; }
+    // Starts whisper-server against the currently selected model if it
+    // isn't already running with that exact model, listening on a fixed
+    // local-only port. A no-op (beyond immediately re-emitting
+    // liveServerStateChanged(true) if already up) when it's already running
+    // with the right model. Readiness is confirmed by polling the HTTP port
+    // rather than watching stdout/stderr for a "ready" line — whisper.cpp's
+    // exact log wording isn't a stable contract to depend on, but the port
+    // actually answering is.
+    void ensureLiveServerRunning();
+    void stopLiveServer();
+
+    // Sends one already-WAV-encoded audio chunk to the running server's
+    // /inference endpoint. isFinalChunk is passed straight through to
+    // liveChunkTranscribed() so the caller can tell "just another
+    // mid-utterance chunk" apart from "recording just stopped, this is the
+    // last one" without separate bookkeeping of its own. Calls queue
+    // internally (sent one at a time, in submission order) rather than
+    // firing concurrently — see sendNextQueuedChunk()'s own comment for why
+    // that matters for keeping transcribed text in order, and for why this
+    // never blocks the caller (VoiceRecorder's own audio capture is never
+    // held up by transcription falling behind).
+    void transcribeChunkLive(const QByteArray &wavData, bool isFinalChunk);
+
 signals:
     // Fires after any change to what's actually on disk (download finished,
     // models directory changed) — Settings' model table listens live.
@@ -101,6 +148,16 @@ signals:
     // with the best-effort transcript so far, so a caller can show live
     // feedback instead of a blank box until the whole recording is done.
     void transcriptionProgress(const QString &partialText);
+
+    // running is false both while it's still starting up and after it's
+    // stopped/failed — error is empty in the (also-false) "still starting"
+    // case, and non-empty for a genuine failure to start/come up in time.
+    void liveServerStateChanged(bool running, const QString &error);
+    // One per transcribeChunkLive() call, always eventually — see that
+    // method's own comment on ordering. success false covers both an HTTP-
+    // level failure and the server not being up at all when the chunk was
+    // submitted.
+    void liveChunkTranscribed(const QString &text, bool isFinalChunk, bool success, const QString &error);
 
 private slots:
     void onTranscribeReadyReadStandardOutput();
@@ -126,8 +183,31 @@ private:
     // lazily, only once a download actually needs somewhere to land.
     void ensureModelsDirSet();
 
+    // Same "search a fixed candidate list" shape as redetect()'s own
+    // binaryPath detection, just for the server binary — factored out since
+    // redetect() needs to call it too (server autodetection depends on
+    // where binaryPath ended up, so it has to happen after that's known).
+    QString detectServerBinary() const;
+    // Polls http://127.0.0.1:<port>/ every 300ms (up to ~15s) until it gets
+    // any HTTP response at all, rather than parsing whisper-server's
+    // stdout/stderr for a "ready" line — see ensureLiveServerRunning()'s own
+    // comment for why. Only ever running while m_serverProcess is the one
+    // it started polling for; stopLiveServer() implicitly cancels it by
+    // clearing m_serverProcess, which this checks on every attempt.
+    void pollServerReadiness(int attempt);
+    // Sends whichever chunk is at the front of m_chunkQueue, if the server
+    // is ready and nothing else is already in flight — called after every
+    // transcribeChunkLive() and again once each request finishes, so the
+    // queue keeps draining one at a time without the caller having to drive
+    // it. One-at-a-time (rather than firing every queued chunk concurrently)
+    // is what keeps liveChunkTranscribed() results arriving in the same
+    // order the audio was recorded in — concurrent requests could finish in
+    // any order and scramble the transcript.
+    void sendNextQueuedChunk();
+
     QString m_binaryPath;
     QString m_modelsDir;
+    QString m_serverBinaryPath;
 
     QNetworkAccessManager m_network;
     struct DownloadState
@@ -151,4 +231,25 @@ private:
     // normal-sized one that still transcribes empty points at genuine
     // silence instead. Cleared alongside m_transcribeStdoutBuffer.
     QString m_transcribeWavPath;
+
+    // --- Live transcription (whisper-server) state --------------------------
+    QProcess *m_serverProcess = nullptr;
+    // True only once pollServerReadiness() has actually seen a response —
+    // m_serverProcess alone just means "the OS process exists," not "the
+    // HTTP server inside it is accepting requests yet."
+    bool m_serverReady = false;
+    // Which model m_serverProcess was launched with — ensureLiveServerRunning()
+    // restarts the process if selectedModel() no longer matches this,
+    // since whisper-server (like whisper-cli) only ever loads one model,
+    // fixed at its own startup.
+    QString m_liveServerModel;
+    static constexpr quint16 kLiveServerPort = 8781; // arbitrary, local-only
+
+    struct QueuedChunk
+    {
+        QByteArray wavData;
+        bool isFinalChunk = false;
+    };
+    QVector<QueuedChunk> m_chunkQueue;
+    QNetworkReply *m_activeChunkReply = nullptr;
 };

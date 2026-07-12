@@ -24,6 +24,7 @@
 #include <QSettings>
 #include <QPlainTextEdit>
 #include <QTextCursor>
+#include <QDebug>
 #include <QMessageBox>
 
 ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
@@ -282,11 +283,16 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     connect(&m_voiceRecorder, &VoiceRecorder::recordingFinished, this, &ChatWidget::onVoiceRecordingFinished);
     connect(&m_voiceRecorder, &VoiceRecorder::recordingFailed, this, &ChatWidget::onVoiceRecordingFailed);
     connect(&m_voiceRecorder, &VoiceRecorder::audioLevelChanged, this, &ChatWidget::audioLevelChanged);
+    connect(&m_voiceRecorder, &VoiceRecorder::liveChunkReady, this, &ChatWidget::onVoiceLiveChunkReady);
     if (m_whisperManager) {
         connect(m_whisperManager, &WhisperManager::transcriptionFinished,
                 this, &ChatWidget::onWhisperTranscriptionFinished);
         connect(m_whisperManager, &WhisperManager::transcriptionProgress,
                 this, &ChatWidget::onWhisperTranscriptionProgress);
+        connect(m_whisperManager, &WhisperManager::liveChunkTranscribed,
+                this, &ChatWidget::onWhisperLiveChunkTranscribed);
+        connect(m_whisperManager, &WhisperManager::liveServerStateChanged,
+                this, &ChatWidget::onWhisperLiveServerStateChanged);
     }
 
     m_sendButton = new QPushButton;
@@ -1895,7 +1901,21 @@ void ChatWidget::onVoicePressed()
     m_voiceButton->setProperty("recording", true);
     m_voiceButton->style()->unpolish(m_voiceButton);
     m_voiceButton->style()->polish(m_voiceButton);
-    m_voiceRecorder.startRecording();
+
+    // Live mode (transcribing in short chunks *while* still recording,
+    // rather than once at release) is used automatically whenever a
+    // whisper-server binary is available — same "just works once it's set
+    // up" pattern as whisper-cli itself, no separate Settings toggle to
+    // remember to flip. ensureLiveServerRunning() is safe to call every
+    // press: a no-op if already up against the right model, and doesn't
+    // block waiting for readiness — any chunk that arrives before it's
+    // actually ready just gets queued (see WhisperManager::sendNextQueuedChunk()).
+    const bool live = m_whisperManager && m_whisperManager->isServerBinaryAvailable();
+    if (live) {
+        m_inputEdit->clear();
+        m_whisperManager->ensureLiveServerRunning();
+    }
+    m_voiceRecorder.startRecording(live);
     reloadThemedIcons();
 }
 
@@ -1904,7 +1924,11 @@ void ChatWidget::onVoiceReleased()
     m_voiceButton->setProperty("recording", false);
     m_voiceButton->style()->unpolish(m_voiceButton);
     m_voiceButton->style()->polish(m_voiceButton);
-    m_voiceRecorder.stopRecording(); // result arrives via onVoiceRecordingFinished, asynchronously
+    // Result arrives asynchronously either way — via onVoiceRecordingFinished()
+    // for a normal (non-live) recording, or onVoiceLiveChunkReady() with
+    // isFinalChunk=true for a live one (VoiceRecorder itself remembers
+    // which mode startRecording() was called with).
+    m_voiceRecorder.stopRecording();
     reloadThemedIcons();
 }
 
@@ -1975,6 +1999,60 @@ void ChatWidget::onWhisperTranscriptionFinished(const QString &text, bool succes
     // The person can read it over, fix anything wrong, and hit Send themselves.
     m_inputEdit->moveCursor(QTextCursor::End);
     m_inputEdit->setFocus();
+}
+
+void ChatWidget::onVoiceLiveChunkReady(const QByteArray &wavData, bool isFinalChunk)
+{
+    if (!m_whisperManager)
+        return;
+
+    if (wavData.isEmpty()) {
+        // Nothing new since the last chunk boundary — still need to close
+        // out the recording if this was the final one (e.g. a chunk
+        // boundary happened to land exactly at button release).
+        if (isFinalChunk)
+            finishLiveVoiceRecording();
+        return;
+    }
+
+    m_whisperManager->transcribeChunkLive(wavData, isFinalChunk);
+}
+
+void ChatWidget::onWhisperLiveChunkTranscribed(const QString &text, bool isFinalChunk, bool success, const QString &error)
+{
+    if (success && !text.isEmpty()) {
+        // Appended, not replaced — each chunk is its own already-finished
+        // piece of transcription (unlike onWhisperTranscriptionProgress()'s
+        // single growing partial for one whole-file transcription), so the
+        // box just keeps building up sentence by sentence as the person talks.
+        QString current = m_inputEdit->toPlainText();
+        if (!current.isEmpty() && !current.endsWith(' '))
+            current += ' ';
+        current += text;
+        m_inputEdit->setPlainText(current);
+        m_inputEdit->moveCursor(QTextCursor::End);
+    } else if (!success) {
+        // Best-effort: one failed chunk (a dropped request, the server
+        // briefly unavailable) doesn't interrupt the recording or spam an
+        // error bubble — whatever text did come through from other chunks
+        // is still worth keeping.
+        qWarning() << "Live transcription chunk failed:" << error;
+    }
+
+    if (isFinalChunk)
+        finishLiveVoiceRecording();
+}
+
+void ChatWidget::onWhisperLiveServerStateChanged(bool running, const QString &error)
+{
+    if (!running && !error.isEmpty())
+        appendMessageBubble("error", "Live transcription: " + error);
+}
+
+void ChatWidget::finishLiveVoiceRecording()
+{
+    if (m_voiceAutoSend && !m_inputEdit->toPlainText().trimmed().isEmpty())
+        onSendClicked();
 }
 
 void ChatWidget::reloadThemedIcons()

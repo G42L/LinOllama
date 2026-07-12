@@ -106,6 +106,7 @@ private slots:
     void onWhisperDownloadFinished(const QString &modelId, bool success, const QString &error);
     void onChangeWhisperBinaryClicked();
     void onChangeWhisperModelsDirClicked();
+    void onChangeWhisperServerBinaryClicked();
     void onWhisperExpandToggleClicked();
     void onVoiceAutoSendToggled(bool enabled);
 

@@ -172,7 +172,7 @@ QString VoiceRecorder::pickOutputDir()
     return QStandardPaths::writableLocation(QStandardPaths::TempLocation);
 }
 
-void VoiceRecorder::startRecording()
+void VoiceRecorder::startRecording(bool liveMode)
 {
     if (m_source)
         return; // already recording — startRecording()/stopRecording() bracket, they don't nest
@@ -194,6 +194,8 @@ void VoiceRecorder::startRecording()
 
     m_recordedMono.clear();
     m_smoothedLevel = 0.0;
+    m_liveSilenceSeconds = 0.0;
+    m_liveMode = liveMode;
     m_recording = true;
 
     m_source = new QAudioSource(m_device, format, this);
@@ -223,6 +225,15 @@ void VoiceRecorder::stopRecording()
     m_recording = false;
     m_smoothedLevel = 0.0;
     emit audioLevelChanged(0.0);
+
+    if (m_liveMode) {
+        // Whatever's left since the last chunk boundary (possibly nothing,
+        // if one landed right at release) — the caller's cue that this
+        // recording's live stream of chunks is now complete.
+        const QByteArray wav = flushLiveChunk(format);
+        emit liveChunkReady(wav, /*isFinalChunk=*/true);
+        return;
+    }
 
     if (m_recordedMono.isEmpty()) {
         emit recordingFailed("No audio was captured.");
@@ -281,28 +292,52 @@ void VoiceRecorder::onCaptureReadyRead()
     m_smoothedLevel += (peak - m_smoothedLevel) * rate;
 
     emit audioLevelChanged(m_smoothedLevel);
+
+    if (!m_liveMode)
+        return;
+
+    // Deliberately simple energy-threshold VAD rather than anything
+    // spectral — cutting live chunks at an actual pause avoids the word-
+    // boundary garbling a fixed-time-window cut would cause (whisper
+    // decoding half a word at the very edge of a chunk), and speech is
+    // reliably louder than the gaps between sentences/phrases even with a
+    // fairly conservative threshold like this one.
+    static constexpr qreal kLiveSilenceThreshold = 0.02;
+    static constexpr qreal kLiveSilenceCutSeconds = 0.35; // how long a pause has to last before it counts as a boundary
+    static constexpr qreal kLiveChunkMinSeconds = 1.5;    // never cut a chunk shorter than this, even at a real pause
+    static constexpr qreal kLiveChunkMaxSeconds = 8.0;    // cut here regardless of silence — caps how long a run-on sentence can go untranscribed
+
+    const qreal bufferDurationSeconds = double(mono.size()) / double(m_source->format().sampleRate());
+    m_liveSilenceSeconds = (peak < kLiveSilenceThreshold) ? (m_liveSilenceSeconds + bufferDurationSeconds) : 0.0;
+
+    const qreal chunkDurationSeconds = double(m_recordedMono.size()) / double(m_source->format().sampleRate());
+    const bool hitSilenceBoundary = chunkDurationSeconds >= kLiveChunkMinSeconds
+        && m_liveSilenceSeconds >= kLiveSilenceCutSeconds;
+    const bool hitHardCap = chunkDurationSeconds >= kLiveChunkMaxSeconds;
+
+    if (hitSilenceBoundary || hitHardCap) {
+        const QByteArray wav = flushLiveChunk(m_source->format());
+        if (!wav.isEmpty())
+            emit liveChunkReady(wav, /*isFinalChunk=*/false);
+    }
 }
 
-bool VoiceRecorder::writeWavFile(const QString &path, const QByteArray &pcm16Data,
-                                  int sampleRate, int channels)
+QByteArray VoiceRecorder::buildWavBytes(const QByteArray &pcm16Data, int sampleRate, int channels)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly))
-        return false;
-
     const quint32 dataSize = static_cast<quint32>(pcm16Data.size());
     const quint16 bitsPerSample = 16;
     const quint16 blockAlign = static_cast<quint16>(channels * bitsPerSample / 8);
     const quint32 byteRate = static_cast<quint32>(sampleRate) * blockAlign;
 
-    QDataStream out(&file);
+    QByteArray wav;
+    QDataStream out(&wav, QIODevice::WriteOnly);
     out.setByteOrder(QDataStream::LittleEndian);
 
-    file.write("RIFF");
+    out.writeRawData("RIFF", 4);
     out << static_cast<quint32>(36 + dataSize);
-    file.write("WAVE");
+    out.writeRawData("WAVE", 4);
 
-    file.write("fmt ");
+    out.writeRawData("fmt ", 4);
     out << static_cast<quint32>(16); // fmt chunk size
     out << static_cast<quint16>(1);  // PCM
     out << static_cast<quint16>(channels);
@@ -311,9 +346,40 @@ bool VoiceRecorder::writeWavFile(const QString &path, const QByteArray &pcm16Dat
     out << blockAlign;
     out << bitsPerSample;
 
-    file.write("data");
+    out.writeRawData("data", 4);
     out << dataSize;
-    file.write(pcm16Data);
+    out.writeRawData(pcm16Data.constData(), pcm16Data.size());
 
+    return wav;
+}
+
+bool VoiceRecorder::writeWavFile(const QString &path, const QByteArray &pcm16Data,
+                                  int sampleRate, int channels)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly))
+        return false;
+    file.write(buildWavBytes(pcm16Data, sampleRate, channels));
     return file.error() == QFile::NoError;
+}
+
+QByteArray VoiceRecorder::flushLiveChunk(const QAudioFormat &format)
+{
+    m_liveSilenceSeconds = 0.0;
+
+    if (m_recordedMono.isEmpty())
+        return QByteArray();
+
+    const QVector<float> resampled = resampleLinear(m_recordedMono, format.sampleRate(), kTargetSampleRate);
+    m_recordedMono.clear();
+
+    QByteArray pcm16;
+    pcm16.resize(resampled.size() * 2);
+    auto *out = reinterpret_cast<qint16 *>(pcm16.data());
+    for (int i = 0; i < resampled.size(); ++i) {
+        const float clamped = std::clamp(resampled[i], -1.0f, 1.0f);
+        out[i] = static_cast<qint16>(clamped * 32767.0f);
+    }
+
+    return buildWavBytes(pcm16, kTargetSampleRate, kTargetChannels);
 }

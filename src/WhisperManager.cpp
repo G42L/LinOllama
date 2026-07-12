@@ -7,7 +7,12 @@
 #include <QStandardPaths>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QHttpMultiPart>
 #include <QUrl>
+#include <QUrlQuery>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QTimer>
 #include <QDebug>
 
 namespace {
@@ -23,6 +28,11 @@ WhisperManager::WhisperManager(QObject *parent)
     : QObject(parent)
 {
     redetect();
+}
+
+WhisperManager::~WhisperManager()
+{
+    stopLiveServer();
 }
 
 QVector<WhisperModelInfo> WhisperManager::catalog()
@@ -86,7 +96,37 @@ void WhisperManager::redetect()
         }
     }
 
+    m_serverBinaryPath.clear();
+    const QString savedServerBinary = settings.value("whisper/serverBinaryPath").toString();
+    if (!savedServerBinary.isEmpty() && QFileInfo(savedServerBinary).isExecutable())
+        m_serverBinaryPath = savedServerBinary;
+    else
+        m_serverBinaryPath = detectServerBinary();
+
     emit modelsChanged();
+}
+
+QString WhisperManager::detectServerBinary() const
+{
+    QStringList candidates = {
+        QStandardPaths::findExecutable("whisper-server"),
+        QStandardPaths::findExecutable("server"), // older whisper.cpp CMake target name
+        "/usr/local/bin/whisper-server",
+        "/usr/bin/whisper-server",
+    };
+    // Most likely spot: right next to whisper-cli, if that was found —
+    // whisper.cpp's own build drops every example binary into the same
+    // bin/ directory.
+    if (!m_binaryPath.isEmpty()) {
+        const QDir binDir = QFileInfo(m_binaryPath).dir();
+        candidates.prepend(binDir.filePath("server"));
+        candidates.prepend(binDir.filePath("whisper-server"));
+    }
+    for (const QString &candidate : candidates) {
+        if (!candidate.isEmpty() && QFileInfo(candidate).isExecutable())
+            return candidate;
+    }
+    return QString();
 }
 
 bool WhisperManager::isBinaryAvailable() const
@@ -101,6 +141,21 @@ void WhisperManager::setBinaryPath(const QString &path)
         settings.remove("whisper/binaryPath");
     else
         settings.setValue("whisper/binaryPath", path);
+    redetect();
+}
+
+bool WhisperManager::isServerBinaryAvailable() const
+{
+    return !m_serverBinaryPath.isEmpty() && QFileInfo(m_serverBinaryPath).isExecutable();
+}
+
+void WhisperManager::setServerBinaryPath(const QString &path)
+{
+    QSettings settings;
+    if (path.isEmpty())
+        settings.remove("whisper/serverBinaryPath");
+    else
+        settings.setValue("whisper/serverBinaryPath", path);
     redetect();
 }
 
@@ -409,4 +464,177 @@ void WhisperManager::onTranscribeProcessFinished(int exitCode, QProcess::ExitSta
     }
 
     emit transcriptionFinished(text, true, QString());
+}
+
+// --- Live transcription (whisper-server) ------------------------------------
+
+void WhisperManager::ensureLiveServerRunning()
+{
+    const QString modelId = selectedModel();
+    if (modelId.isEmpty()) {
+        emit liveServerStateChanged(false, "No Whisper model selected — pick one in Settings.");
+        return;
+    }
+
+    if (m_serverProcess && m_liveServerModel == modelId) {
+        // Already running against the right model. Only re-announce if it's
+        // actually ready yet — if it's still mid-startup, the original
+        // pollServerReadiness() chain from when it was launched will report
+        // that on its own.
+        if (m_serverReady)
+            emit liveServerStateChanged(true, QString());
+        return;
+    }
+
+    stopLiveServer(); // wrong model (or nothing) running — restart clean
+
+    if (!isServerBinaryAvailable()) {
+        emit liveServerStateChanged(false,
+            "whisper-server binary not found. Build the \"server\" example from your whisper.cpp "
+            "checkout (alongside whisper-cli) and point Settings at it, or live transcription will "
+            "stay unavailable — push-to-talk transcription on release still works either way.");
+        return;
+    }
+
+    const QString modelPath = findModelPath(modelId);
+    if (!QFileInfo::exists(modelPath)) {
+        emit liveServerStateChanged(false,
+            "Selected Whisper model (" + modelId + ") isn't downloaded — check Settings.");
+        return;
+    }
+
+    m_liveServerModel = modelId;
+    m_serverReady = false;
+    m_serverProcess = new QProcess(this);
+    m_serverProcess->setProgram(m_serverBinaryPath);
+    m_serverProcess->setArguments({
+        "-m", modelPath,
+        "--host", "127.0.0.1",
+        "--port", QString::number(kLiveServerPort),
+    });
+    connect(m_serverProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError) {
+        if (!m_serverProcess)
+            return;
+        const QString error = m_serverProcess->errorString();
+        stopLiveServer();
+        emit liveServerStateChanged(false, error);
+    });
+    m_serverProcess->start();
+
+    pollServerReadiness(0);
+}
+
+void WhisperManager::pollServerReadiness(int attempt)
+{
+    static constexpr int kMaxAttempts = 50; // ~15s total at 300ms apiece
+    if (!m_serverProcess)
+        return; // stopLiveServer() already ran (failed to start, or superseded) — this poll chain is dead
+
+    QNetworkReply *probe = m_network.get(
+        QNetworkRequest(QUrl(QString("http://127.0.0.1:%1/").arg(kLiveServerPort))));
+    connect(probe, &QNetworkReply::finished, this, [this, probe, attempt]() {
+        probe->deleteLater();
+        if (!m_serverProcess)
+            return; // stopped while this probe was in flight
+
+        // Any actual HTTP exchange — even a 404 for "/", which is likely
+        // since whisper-server only really defines /inference — means the
+        // port is open and the server is alive; ConnectionRefusedError
+        // specifically is the "nothing's listening yet" case to keep
+        // waiting on.
+        if (probe->error() != QNetworkReply::ConnectionRefusedError) {
+            m_serverReady = true;
+            emit liveServerStateChanged(true, QString());
+            return;
+        }
+
+        if (attempt + 1 >= kMaxAttempts) {
+            emit liveServerStateChanged(false, "whisper-server didn't come up in time.");
+            stopLiveServer();
+            return;
+        }
+        QTimer::singleShot(300, this, [this, attempt]() { pollServerReadiness(attempt + 1); });
+    });
+}
+
+void WhisperManager::stopLiveServer()
+{
+    if (m_activeChunkReply) {
+        m_activeChunkReply->abort();
+        m_activeChunkReply = nullptr;
+    }
+    // Whatever's still queued belongs to a server that's about to stop
+    // existing — fail it out now rather than leaving the caller waiting on
+    // a liveChunkTranscribed() that will never arrive.
+    const QVector<QueuedChunk> abandoned = m_chunkQueue;
+    m_chunkQueue.clear();
+    for (const QueuedChunk &chunk : abandoned)
+        emit liveChunkTranscribed(QString(), chunk.isFinalChunk, false, "Live transcription stopped.");
+
+    if (!m_serverProcess)
+        return;
+
+    QProcess *process = m_serverProcess;
+    m_serverProcess = nullptr; // cleared first so any in-flight callback (errorOccurred, pollServerReadiness) sees it as already-gone
+    m_serverReady = false;
+    m_liveServerModel.clear();
+    process->kill();
+    process->deleteLater();
+}
+
+void WhisperManager::transcribeChunkLive(const QByteArray &wavData, bool isFinalChunk)
+{
+    m_chunkQueue.append(QueuedChunk{wavData, isFinalChunk});
+    sendNextQueuedChunk();
+}
+
+void WhisperManager::sendNextQueuedChunk()
+{
+    if (m_activeChunkReply || m_chunkQueue.isEmpty())
+        return;
+
+    if (!m_serverProcess || !m_serverReady) {
+        // Server isn't up (never started, still starting, or died mid-
+        // recording) — fail the whole backlog now rather than holding
+        // chunks that may never get sent. VoiceRecorder's own capture was
+        // never affected either way (see this method's header comment).
+        const QVector<QueuedChunk> stuck = m_chunkQueue;
+        m_chunkQueue.clear();
+        for (const QueuedChunk &chunk : stuck) {
+            emit liveChunkTranscribed(QString(), chunk.isFinalChunk, false,
+                                       "Live transcription server isn't running.");
+        }
+        return;
+    }
+
+    const QueuedChunk chunk = m_chunkQueue.takeFirst();
+
+    auto *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+    QHttpPart filePart;
+    filePart.setHeader(QNetworkRequest::ContentTypeHeader, QVariant("audio/wav"));
+    filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
+                        QVariant("form-data; name=\"file\"; filename=\"chunk.wav\""));
+    filePart.setBody(chunk.wavData);
+    multiPart->append(filePart);
+
+    QNetworkRequest request(QUrl(QString("http://127.0.0.1:%1/inference").arg(kLiveServerPort)));
+    m_activeChunkReply = m_network.post(request, multiPart);
+    multiPart->setParent(m_activeChunkReply); // freed alongside the reply
+
+    connect(m_activeChunkReply, &QNetworkReply::finished, this, [this, chunk]() {
+        QNetworkReply *reply = m_activeChunkReply;
+        m_activeChunkReply = nullptr;
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            emit liveChunkTranscribed(QString(), chunk.isFinalChunk, false, reply->errorString());
+        } else {
+            // whisper-server's /inference responds {"text": "..."} by default.
+            const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+            const QString text = doc.object().value("text").toString().trimmed();
+            emit liveChunkTranscribed(text, chunk.isFinalChunk, true, QString());
+        }
+
+        sendNextQueuedChunk(); // picks up whatever arrived while this one was in flight, if any
+    });
 }
