@@ -27,7 +27,7 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     , m_whisperManager(whisperManager)
 {
     setWindowTitle("Ollama GUI");
-    resize(1000, 650);
+    resize(1280, 720);
 
     updateWindowIconForTheme();
     connect(m_themeManager, &ThemeManager::themeChanged, this, &MainWindow::updateWindowIconForTheme);
