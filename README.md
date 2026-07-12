@@ -199,8 +199,22 @@ cmake --build build -j
 
 There's no install step required to run it locally; `cmake --install build`
 will place the binary under `bin/` (via `RUNTIME DESTINATION bin`) if you
-want it on `PATH` elsewhere, but there's no bundled `.desktop` file or icon
-install yet — see Limitations.
+want it on `PATH` elsewhere.
+
+**Launching from an app menu**: `ollama-tray.desktop` (checked in at the
+repo root) points at this checkout's own `build/ollama-tray` and
+`src/icons/ollama-app-icon.svg` — a static-color copy of the in-app themed
+icon, since a `.desktop` file can't do the `{{iconColor}}` light/dark
+substitution the app itself does at runtime (see `Theme::loadThemedIcon()`).
+Copy or symlink it into `~/.local/share/applications/` to add it to your
+launcher:
+
+```bash
+ln -s "$(pwd)/ollama-tray.desktop" ~/.local/share/applications/
+update-desktop-database ~/.local/share/applications  # optional, most DEs pick it up automatically
+```
+
+See Limitations if you move this checkout elsewhere afterward.
 
 ## Data & configuration
 
@@ -250,8 +264,12 @@ install yet — see Limitations.
   query/marker per map block, no multi-stop routes.
 - **Conversations can't be renamed** through the UI (only auto-titled from
   the first message), and there's no rename/archive/export flow.
-- **No `.desktop` file or installed icon** — launching from an app menu
-  (rather than a terminal or a manually-created launcher) isn't set up yet.
+- **The `.desktop` launcher entry points at a `build/` path, not an
+  installed one** — `ollama-tray.desktop`'s `Exec`/`Icon` reference this
+  checkout's own `build/ollama-tray` binary and `src/icons/` directly
+  (there's no `make install` step that copies them anywhere system-wide),
+  so it'll break if this directory is moved and needs re-generating/editing
+  by hand for a packaged install.
 
 ## Troubleshooting
 
