@@ -86,6 +86,16 @@ QString ConversationStore::createConversation(const QString &model)
     return c.id;
 }
 
+QString ConversationStore::importConversation(Conversation conversation)
+{
+    conversation.id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    m_conversations.prepend(conversation);
+    persist(conversation);
+    emit conversationListChanged();
+    return conversation.id;
+}
+
 QString ConversationStore::createConversationWithMessages(const QString &model, const QVector<ChatMessage> &messages)
 {
     const QString id = createConversation(model);

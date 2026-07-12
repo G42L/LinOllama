@@ -36,6 +36,16 @@ public:
     // original (see ChatWidget::editMessage()). Returns the new id.
     QString createConversationWithMessages(const QString &model, const QVector<ChatMessage> &messages);
 
+    // Adds a conversation read back from an exported JSON file (see
+    // MainWindow's sidebar "Export conversation…"/"Import conversation…")
+    // as a new entry — a fresh id is always assigned (ignoring whatever was
+    // in the file), so importing the same export twice, or an export
+    // that happens to collide with an existing conversation's id, can
+    // never overwrite anything already in the store. Everything else
+    // (title, model, messages, keepAliveSeconds, createdAt) is kept as-is
+    // from the file. Persists immediately and returns the new id.
+    QString importConversation(Conversation conversation);
+
     // Appends a message to the given conversation, auto-derives a title
     // from the first user message if the conversation doesn't have one yet,
     // and persists the change.

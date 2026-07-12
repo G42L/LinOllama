@@ -41,6 +41,15 @@ ConversationListItemWidget::ConversationListItemWidget(const QString &conversati
 
     connect(m_menuButton, &QToolButton::clicked, this, [this]() {
         auto *menu = new QMenu(this);
+        // See MainWindow::buildDeleteMenu()'s own comment — same rounded-
+        // corner background-halo fix, needed at every QMenu construction
+        // site individually since it's a per-window attribute.
+        menu->setAttribute(Qt::WA_TranslucentBackground);
+
+        QAction *exportAction = menu->addAction("Export conversation…");
+        connect(exportAction, &QAction::triggered, this, [this]() {
+            emit exportRequested(m_conversationId);
+        });
 
         // A styled QLabel rather than a plain QAction so the delete entry
         // can be given red "danger" text — see Theme.cpp's #deleteMenuItem rule.

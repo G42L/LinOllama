@@ -13,6 +13,12 @@
 #include <QMessageBox>
 #include <QWidgetAction>
 #include <QWebEngineView>
+#include <QFileDialog>
+#include <QStandardPaths>
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QRegularExpression>
 
 MainWindow::MainWindow(SystemMonitor *systemMonitor,
                         OllamaClient *ollamaClient,
@@ -53,6 +59,16 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     connect(m_newConversationButton, &QToolButton::clicked,
             this, &MainWindow::onNewConversationClicked);
     topBarLayout->addWidget(m_newConversationButton);
+
+    m_importConversationButton = new QToolButton;
+    m_importConversationButton->setObjectName("importConversationButton");
+    m_importConversationButton->setToolTip("Import conversation…");
+    m_importConversationButton->setIconSize(QSize(16, 16));
+    m_importConversationButton->setAutoRaise(true);
+    m_importConversationButton->setCursor(Qt::PointingHandCursor);
+    connect(m_importConversationButton, &QToolButton::clicked,
+            this, &MainWindow::onImportConversationClicked);
+    topBarLayout->addWidget(m_importConversationButton);
 
     m_sidebarToggleButton = new QToolButton;
     m_sidebarToggleButton->setObjectName("sidebarToggleButton");
@@ -207,6 +223,41 @@ void MainWindow::onNewConversationClicked()
     selectSidebarRow(id);
 }
 
+void MainWindow::onImportConversationClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Import conversation", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        "Conversation files (*.json);;All files (*)");
+    if (path.isEmpty())
+        return;
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        QMessageBox::warning(this, "Import failed", "Couldn't open \"" + path + "\".");
+        return;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    // Both a malformed file and a well-formed-but-wrong-shape one (some
+    // unrelated JSON that just happens to parse) are treated the same way
+    // here — "messages" is the one field an exported conversation can't
+    // possibly be missing, so its absence is what actually catches the
+    // latter case, since QJsonObject::value() on a non-object silently
+    // returns an empty QJsonValue rather than erroring.
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()
+        || !doc.object().contains("messages")) {
+        QMessageBox::warning(this, "Import failed",
+            "\"" + path + "\" doesn't look like an exported conversation file.");
+        return;
+    }
+
+    const Conversation imported = Conversation::fromJson(doc.object());
+    const QString id = m_store->importConversation(imported);
+    refreshSidebar();
+    selectSidebarRow(id);
+}
+
 void MainWindow::onChatConversationCreated(const QString &conversationId)
 {
     refreshSidebar();
@@ -329,6 +380,7 @@ void MainWindow::reloadSidebarIcons()
     // now that new-conversation lives in the top bar rather than a bordered
     // sidebar button, it should read as a toolbar icon, not a CTA.
     m_newConversationButton->setIcon(Theme::loadThemedIcon(":/icons/new-chat.svg", dark, 16, "secondaryText"));
+    m_importConversationButton->setIcon(Theme::loadThemedIcon(":/icons/import.svg", dark, 16, "secondaryText"));
 
     m_sidebarToggleButton->setIcon(Theme::loadThemedIcon(
         m_sidebarCollapsed ? ":/icons/sidebar-expand.svg" : ":/icons/sidebar-collapse.svg",
@@ -359,6 +411,17 @@ void MainWindow::onSidebarContextMenuRequested(const QPoint &pos)
 QMenu *MainWindow::buildDeleteMenu(const QString &conversationId, const QString &title)
 {
     auto *menu = new QMenu(this);
+    // Without this, Qt still paints the popup's native window background as
+    // an opaque square behind the QSS-drawn rounded rect (see Theme.cpp's
+    // QMenu { border-radius: 8px; }) — a visible color "halo" peeking out
+    // past the rounded corners. Translucent background lets the corners
+    // outside the rounded rect actually be transparent instead.
+    menu->setAttribute(Qt::WA_TranslucentBackground);
+
+    QAction *exportAction = menu->addAction("Export conversation…");
+    connect(exportAction, &QAction::triggered, this, [this, conversationId, title]() {
+        exportConversation(conversationId, title);
+    });
 
     // A styled QLabel rather than a plain QAction so "Delete chat" can be
     // given red "danger" text — see Theme.cpp's #deleteMenuItem rule. This
@@ -376,6 +439,40 @@ QMenu *MainWindow::buildDeleteMenu(const QString &conversationId, const QString 
     });
 
     return menu;
+}
+
+void MainWindow::exportConversation(const QString &conversationId, const QString &title)
+{
+    const Conversation *conv = m_store->find(conversationId);
+    if (!conv)
+        return;
+
+    // Filesystem-unsafe characters swapped for "_" rather than stripped
+    // outright, so e.g. "Q&A: setup?" still reads recognizably as
+    // "Q&A_ setup_" instead of losing the separators entirely.
+    static const QRegularExpression unsafeChars(R"([/\\:*?"<>|])");
+    QString safeName = title.isEmpty() ? "conversation" : title;
+    safeName.replace(unsafeChars, "_");
+
+    const QString suggestedPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+        + "/" + safeName + ".json";
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export conversation", suggestedPath, "Conversation files (*.json)");
+    if (path.isEmpty())
+        return;
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        QMessageBox::warning(this, "Export failed", "Couldn't write to \"" + path + "\".");
+        return;
+    }
+
+    // The exact same shape ConversationStore itself persists internally
+    // (see Conversation::toJson()) — no separate export format to maintain,
+    // and it round-trips through onImportConversationClicked() perfectly
+    // since that's the same schema Conversation::fromJson() already reads.
+    const QJsonDocument doc(conv->toJson());
+    file.write(doc.toJson(QJsonDocument::Indented));
 }
 
 void MainWindow::confirmAndDeleteConversation(const QString &conversationId, const QString &title)
@@ -423,6 +520,10 @@ void MainWindow::refreshSidebar()
         connect(rowWidget, &ConversationListItemWidget::deleteRequested,
                 this, [this, title = conv.title](const QString &id) {
                     confirmAndDeleteConversation(id, title);
+                });
+        connect(rowWidget, &ConversationListItemWidget::exportRequested,
+                this, [this, title = conv.title](const QString &id) {
+                    exportConversation(id, title);
                 });
 
         item->setSizeHint(rowWidget->sizeHint());

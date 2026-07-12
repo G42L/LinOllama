@@ -24,6 +24,7 @@ public:
 
 signals:
     void deleteRequested(const QString &conversationId);
+    void exportRequested(const QString &conversationId);
 
 protected:
     void enterEvent(QEnterEvent *event) override;

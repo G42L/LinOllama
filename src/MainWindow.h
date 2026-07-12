@@ -46,6 +46,7 @@ protected:
 
 private slots:
     void onNewConversationClicked();
+    void onImportConversationClicked();
     void onSidebarSelectionChanged();
     void onConversationListChanged();
     void onModelsListed(const QStringList &modelNames);
@@ -99,9 +100,10 @@ private:
     // ChatWidget::setActiveConversation().
     void selectSidebarRow(const QString &id);
 
-    // Builds a one-shot popup menu offering "Delete chat" (red text, see
-    // Theme.cpp's #deleteMenuItem rule) for the given conversation. Caller
-    // owns the returned menu and should deleteLater() it after exec().
+    // Builds a one-shot popup menu offering "Export conversation…" and
+    // "Delete chat" (the latter in red text, see Theme.cpp's
+    // #deleteMenuItem rule) for the given conversation. Caller owns the
+    // returned menu and should deleteLater() it after exec().
     QMenu *buildDeleteMenu(const QString &conversationId, const QString &title);
 
     // Shows a confirmation dialog (red "Delete" button) and, only if
@@ -109,6 +111,15 @@ private:
     // if it's the one being removed, so ChatWidget never ends up pointing
     // at a conversation that no longer exists.
     void confirmAndDeleteConversation(const QString &conversationId, const QString &title);
+
+    // Prompts for a save location (defaulting to a sanitized version of the
+    // conversation's own title as the filename) and writes the
+    // conversation's own on-disk JSON shape (see Conversation::toJson()) to
+    // it verbatim — the exported file is byte-for-byte the same schema this
+    // app already persists internally, just copied somewhere the person
+    // chose rather than the app's own conversations folder. Shows an error
+    // dialog on write failure rather than failing silently.
+    void exportConversation(const QString &conversationId, const QString &title);
 
     ConversationStore *m_store = nullptr;
     OllamaClient *m_ollamaClient = nullptr;
@@ -122,6 +133,10 @@ private:
     // collapse/expand, [stretch], settings — so new-conversation and
     // settings both stay reachable even while the sidebar is collapsed.
     QToolButton *m_newConversationButton = nullptr;
+    // Between new-conversation and the sidebar collapse toggle — imports a
+    // conversation previously exported via a sidebar row's right-click menu
+    // (see exportConversation()/onImportConversationClicked()).
+    QToolButton *m_importConversationButton = nullptr;
     QToolButton *m_sidebarToggleButton = nullptr;
     QToolButton *m_settingsButton = nullptr;
     // Far right of the top bar (after the stretch) — Ollama's own server

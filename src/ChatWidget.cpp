@@ -197,6 +197,10 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_toolsButton->setPopupMode(QToolButton::InstantPopup);
 
     auto *toolsMenu = new QMenu(m_toolsButton);
+    // See MainWindow::buildDeleteMenu()'s own comment — avoids a background-
+    // color halo showing past the QSS-rounded corners (Theme.cpp's
+    // QMenu { border-radius: 8px; }).
+    toolsMenu->setAttribute(Qt::WA_TranslucentBackground);
     m_webSearchAction = toolsMenu->addAction("Search Wikipedia");
     m_webSearchAction->setCheckable(true);
     m_webSearchAction->setChecked(m_webSearchEnabled);
@@ -1827,6 +1831,8 @@ void ChatWidget::onJumpToClicked()
     // pattern MainWindow uses for its own context menus (see
     // MainWindow::buildDeleteMenu).
     QMenu menu(this);
+    // See MainWindow::buildDeleteMenu()'s own comment.
+    menu.setAttribute(Qt::WA_TranslucentBackground);
     for (const UserMessageMarker &marker : m_userMessageMarkers) {
         QAction *action = menu.addAction(marker.preview);
         QWidget *row = marker.row;
