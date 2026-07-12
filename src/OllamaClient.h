@@ -15,6 +15,19 @@ struct LoadedModelInfo
     quint64 sizeVramBytes = 0;
 };
 
+// From /api/show's "details" object — everything empty means it couldn't be
+// determined (server unreachable, or a model whose metadata doesn't expose
+// these fields). Shown as-is (e.g. "7B", "Q4_K_M") rather than parsed
+// further, since Ollama doesn't document a fixed enum for either.
+struct ModelMetadata
+{
+    QString family;
+    QString parameterSize;
+    QString quantizationLevel;
+
+    bool isEmpty() const { return family.isEmpty() && parameterSize.isEmpty() && quantizationLevel.isEmpty(); }
+};
+
 // The sampling/generation knobs beyond num_ctx (which predates this struct
 // and keeps its own separate parameter — see sendChatMessage() — since it
 // already had its own independent Settings toggle before these existed).
@@ -104,7 +117,10 @@ public:
     // Result arrives via modelContextLengthFetched(); contextLength is 0
     // there if it couldn't be determined (older Ollama versions, or a model
     // whose metadata doesn't expose it) — callers should treat 0 as "unknown"
-    // rather than "zero-size context".
+    // rather than "zero-size context". Also emits modelMetadataFetched() off
+    // the very same response's "details" object, rather than a second
+    // /api/show round trip for the family/parameter-size/quantization
+    // caller wants alongside it.
     void fetchModelContextLength(const QString &model);
 
     // Hits GET /api/ps for the models currently loaded into memory. Result
@@ -169,6 +185,10 @@ signals:
     // failure/unknown, with contextLength == 0, so callers don't have to
     // guess whether the request is still pending.
     void modelContextLengthFetched(const QString &model, int contextLength);
+    // See fetchModelContextLength()'s own comment — piggybacks on that same
+    // /api/show call. metadata.isEmpty() is the "couldn't be determined"
+    // case, mirroring contextLength's own 0-means-unknown convention above.
+    void modelMetadataFetched(const QString &model, const ModelMetadata &metadata);
 
     void loadedModelsListed(const QVector<LoadedModelInfo> &models);
     void modelUnloaded(const QString &model, bool success);

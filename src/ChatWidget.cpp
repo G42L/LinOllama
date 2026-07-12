@@ -285,6 +285,8 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     connect(m_ollamaClient, &OllamaClient::chatUsage, this, &ChatWidget::onChatUsage);
     connect(m_ollamaClient, &OllamaClient::modelContextLengthFetched,
             this, &ChatWidget::onModelContextLengthFetched);
+    connect(m_ollamaClient, &OllamaClient::modelMetadataFetched,
+            this, &ChatWidget::onModelMetadataFetched);
 
     m_streamRenderTimer = new QTimer(this);
     m_streamRenderTimer->setInterval(50); // ~20 Hz — see the member's own comment
@@ -1418,6 +1420,16 @@ void ChatWidget::onModelContextLengthFetched(const QString &model, int contextLe
         updateContextUsageDisplay();
 }
 
+void ChatWidget::onModelMetadataFetched(const QString &model, const ModelMetadata &metadata)
+{
+    if (!metadata.isEmpty())
+        m_modelMetadataByModel[model] = metadata;
+
+    const Conversation *conv = m_store->find(m_activeConversationId);
+    if (conv && conv->model == model)
+        updateContextUsageDisplay();
+}
+
 void ChatWidget::onModelComboChanged(int index)
 {
     Q_UNUSED(index);
@@ -1493,6 +1505,23 @@ void ChatWidget::updateContextUsageDisplay()
         ? QString(" · %1 tok/s").arg(lastTokensPerSecond, 0, 'f', 1)
         : QString();
 
+    // Family/parameter-size/quantization, e.g. "llama 7B Q4_K_M" — appended
+    // after tok/s since it's the same "about this generation" status line,
+    // and only ever shown once fetchModelContextLength()'s /api/show call
+    // has resolved for the active model (any field Ollama didn't report is
+    // just skipped rather than leaving a stray blank).
+    const ModelMetadata metadata = m_modelMetadataByModel.value(model);
+    QStringList metadataParts;
+    if (!metadata.family.isEmpty())
+        metadataParts << metadata.family;
+    if (!metadata.parameterSize.isEmpty())
+        metadataParts << metadata.parameterSize;
+    if (!metadata.quantizationLevel.isEmpty())
+        metadataParts << metadata.quantizationLevel;
+    const QString metadataSuffix = metadataParts.isEmpty()
+        ? QString()
+        : QString(" · %1").arg(metadataParts.join(' '));
+
     if (maxContext > 0) {
         const int percent = qBound(0, static_cast<int>((double(used) / double(maxContext)) * 100.0), 100);
         m_contextUsageProgress->setValue(percent);
@@ -1504,11 +1533,11 @@ void ChatWidget::updateContextUsageDisplay()
         m_contextUsageProgress->style()->polish(m_contextUsageProgress);
 
         m_contextUsageLabel->setText(
-            QString("%1 / %2 tokens (%3%)%4").arg(used).arg(maxContext).arg(percent).arg(speedSuffix));
+            QString("%1 / %2 tokens (%3%)%4%5").arg(used).arg(maxContext).arg(percent).arg(speedSuffix, metadataSuffix));
     } else {
         m_contextUsageProgress->setValue(0);
         m_contextUsageLabel->setText(used > 0
-            ? QString("%1 tokens used (context size unknown)%2").arg(used).arg(speedSuffix)
+            ? QString("%1 tokens used (context size unknown)%2%3").arg(used).arg(speedSuffix, metadataSuffix)
             : "Context: —");
     }
 }

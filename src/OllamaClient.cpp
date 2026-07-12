@@ -218,11 +218,19 @@ void OllamaClient::fetchModelContextLength(const QString &model)
 
         if (reply->error() != QNetworkReply::NoError) {
             emit modelContextLengthFetched(model, 0);
+            emit modelMetadataFetched(model, ModelMetadata());
             return;
         }
 
         const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
         const QJsonObject obj = doc.object();
+
+        const QJsonObject details = obj.value("details").toObject();
+        ModelMetadata metadata;
+        metadata.family = details.value("family").toString();
+        metadata.parameterSize = details.value("parameter_size").toString();
+        metadata.quantizationLevel = details.value("quantization_level").toString();
+        emit modelMetadataFetched(model, metadata);
 
         // model_info keys are architecture-prefixed, e.g. "llama.context_length"
         // or "qwen2.context_length" — there's no fixed key name, so scan for

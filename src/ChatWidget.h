@@ -169,6 +169,7 @@ private slots:
     void onChatError(const QString &conversationId, const QString &message);
     void onChatUsage(const QString &conversationId, int promptTokens, int completionTokens);
     void onModelContextLengthFetched(const QString &model, int contextLength);
+    void onModelMetadataFetched(const QString &model, const ModelMetadata &metadata);
     void onModelComboChanged(int index);
 
     // ChatQueue's own progress signals — see setModelOptimizationEnabled()
@@ -492,6 +493,11 @@ private:
     // cached — this is a property of the model, not of any one conversation,
     // so it only needs fetching once per model per app session.
     QHash<QString, int> m_contextLengthByModel;
+
+    // Family/parameter-size/quantization per model name, fetched alongside
+    // m_contextLengthByModel off the very same /api/show call (see
+    // OllamaClient::fetchModelContextLength()) and cached the same way.
+    QHash<QString, ModelMetadata> m_modelMetadataByModel;
 
     // Last known generation speed per conversation, kept separately from
     // m_streams (which is erased once a turn finishes/errors) so the speed
