@@ -30,12 +30,29 @@ struct ChatMessage
     QString attachmentsContext;
     QStringList imagesBase64;
 
-    // Wikipedia search results fetched once (see WebSearchClient) when this
-    // message was sent with the "Search the web" tool on — kept separate
-    // from `content` for the same reason attachmentsContext is: the bubble
-    // shows only what the person actually typed, while this gets appended
-    // back on when building the API request, on every subsequent turn too.
+    // Legacy field from the old eager-prefetch "Search the web" hack
+    // (searched before the message was even sent, results glued onto the
+    // user's own message). Superseded by real tool-calling (see toolCalls/
+    // toolName below), but kept and still round-tripped so conversations
+    // saved before that switchover keep working exactly as before.
     QString webSearchContext;
+
+    // Present (non-empty) on an assistant message that called one or more
+    // tools instead of (or before) answering — Ollama's own /api/chat
+    // "message.tool_calls" shape, stored and resent verbatim so the model
+    // sees exactly what it itself asked for on the next round. `content` is
+    // typically empty on a message like this. See ChatWidget's tool-calling
+    // round-trip (streamAssistantReplyForCurrentHistory() /
+    // continueTurnAfterToolResults()) and ToolCallSectionWidget for how
+    // this pairs up with the "tool" role message(s) that follow it.
+    QJsonArray toolCalls;
+
+    // Present on a role == "tool" message: which tool this result came
+    // from — Ollama's API itself doesn't require this (matching is purely
+    // positional against the preceding assistant message's toolCalls), but
+    // it's what lets ToolCallSectionWidget label the result without having
+    // to re-derive it from toolCalls[i].function.name at render time.
+    QString toolName;
 
     QJsonObject toJson() const
     {
@@ -46,7 +63,9 @@ struct ChatMessage
             {"attachmentNames", QJsonArray::fromStringList(attachmentNames)},
             {"attachmentsContext", attachmentsContext},
             {"imagesBase64", QJsonArray::fromStringList(imagesBase64)},
-            {"webSearchContext", webSearchContext}
+            {"webSearchContext", webSearchContext},
+            {"toolCalls", toolCalls},
+            {"toolName", toolName}
         };
     }
 
@@ -62,6 +81,8 @@ struct ChatMessage
         for (const QJsonValue &v : obj.value("imagesBase64").toArray())
             m.imagesBase64 << v.toString();
         m.webSearchContext = obj.value("webSearchContext").toString();
+        m.toolCalls = obj.value("toolCalls").toArray();
+        m.toolName = obj.value("toolName").toString();
         return m;
     }
 };

@@ -45,6 +45,7 @@ public:
         int customNumCtx = 0;
         GenerationOptions genOptions;
         int keepAliveSeconds = kKeepAliveUseServerDefault;
+        QJsonArray tools; // see OllamaClient::sendChatMessage()'s own comment; empty omits the field
     };
 
     explicit ChatQueue(OllamaClient *ollamaClient, QObject *parent = nullptr);

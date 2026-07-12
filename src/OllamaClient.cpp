@@ -72,7 +72,8 @@ struct OllamaClient::ChatStream
 
 void OllamaClient::sendChatMessage(const QString &conversationId, const QString &model,
                                     const QJsonArray &messages, bool think, int customNumCtx,
-                                    const GenerationOptions &genOptions, int keepAliveSeconds)
+                                    const GenerationOptions &genOptions, int keepAliveSeconds,
+                                    const QJsonArray &tools)
 {
     abortChat(conversationId); // replace this conversation's own previous stream, if any — others are untouched
 
@@ -108,6 +109,8 @@ void OllamaClient::sendChatMessage(const QString &conversationId, const QString 
         body["options"] = options;
     if (keepAliveSeconds != kKeepAliveUseServerDefault)
         body["keep_alive"] = keepAliveSeconds;
+    if (!tools.isEmpty())
+        body["tools"] = tools;
 
     auto *stream = new ChatStream;
     stream->reply = m_manager.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
@@ -167,6 +170,15 @@ void OllamaClient::sendChatMessage(const QString &conversationId, const QString 
                 // still-present StreamState, which onChatDone() (right
                 // after) then removes.
                 emit chatUsage(conversationId, stream->pendingPromptEvalCount, stream->pendingEvalCount);
+
+                // Same "before chatDone()" reasoning as chatUsage() above —
+                // ChatWidget::onChatDone() needs to already know whether
+                // this turn ended in a tool call before it decides whether
+                // to finalize the reply or kick off tool execution instead.
+                const QJsonArray toolCalls = messageObj.value("tool_calls").toArray();
+                if (!toolCalls.isEmpty())
+                    emit chatToolCalls(conversationId, toolCalls);
+
                 emit chatDone(conversationId);
             }
         }

@@ -42,6 +42,12 @@ add_executable(ollama-tray
     src/AutoHeightTextBrowser.h
     src/ThinkingSectionWidget.cpp
     src/ThinkingSectionWidget.h
+    src/ToolCallSectionWidget.cpp
+    src/ToolCallSectionWidget.h
+    src/BuiltinTools.cpp
+    src/BuiltinTools.h
+    src/ToolExecutor.cpp
+    src/ToolExecutor.h
     src/ChatWidget.cpp
     src/ChatWidget.h
     src/StatsStripWidget.cpp

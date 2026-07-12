@@ -100,9 +100,17 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   read and appended to your message as context (skipped if they look
   binary); images (`png/jpg/jpeg/gif/bmp/webp`) are base64-encoded and sent
   via Ollama's vision `images` field, for models that support it.
-- **Web search tool**: a "Tools" toggle that looks up your message on
-  **Wikipedia** (not a general web search engine — see Limitations) and
-  folds the results into your message before sending.
+- **Tool calling**: "Tools" toggles for **Search the web** (Wikipedia —
+  not a general web search engine, see Limitations), **Calculator**
+  (exact arithmetic, `+ - * / % ^` and parentheses), and **Current date &
+  time**. Unlike a plain toggle that always runs before sending, enabling
+  one just makes it available (via Ollama's `tools` API) — the model
+  itself decides, per reply, whether to actually call it, and can chain
+  several calls before answering. Each call and its result show as a
+  collapsible section above the reply, same as the "Thinking" trace.
+  Requires a tool-calling-capable model (e.g. Llama 3.1+, Qwen2.5+,
+  Mistral Nemo); on a model without that support, an enabled tool is
+  simply never called.
 - **Voice button**: hold to record, release to transcribe (via a local
   [Whisper](https://github.com/ggerganov/whisper.cpp) model — nothing is
   sent anywhere). The input box fills in live as text comes back, not just
@@ -288,8 +296,8 @@ See Limitations if you move this checkout elsewhere afterward.
   `~/.config/systemd/user/ollama.service.d/override.conf`.
 - Nothing is sent anywhere except your configured Ollama server, your
   selected microphone → the local whisper.cpp process (never leaves the
-  machine), and — only when you explicitly enable the web search tool for a
-  message — Wikipedia's public API.
+  machine), and — only when the web search tool is enabled *and* the model
+  actually decides to call it — Wikipedia's public API.
 
 ## ⛔ Known limitations
 
@@ -302,6 +310,12 @@ See Limitations if you move this checkout elsewhere afterward.
   either block non-browser API access or require a paid key, and adding one
   (e.g. Brave Search) would need a user-supplied API key in Settings, which
   isn't built yet.
+- **Only built-in tools, no custom/user-defined ones.** Tool calling is
+  limited to the three tools ollama-tray ships with — there's no Settings
+  UI yet for defining your own (e.g. a webhook-backed tool). A single turn
+  also caps at 4 chained tool-call rounds before the app forces a final
+  answer, as a guard against a model that keeps calling tools without ever
+  actually answering.
 - **No remote/non-default Ollama host setting.** The client can technically
   point at a different base URL, but there's no Settings UI to configure it
   yet — it's hardcoded to `http://127.0.0.1:11434`.

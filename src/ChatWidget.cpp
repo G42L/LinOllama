@@ -1,5 +1,7 @@
 #include "ChatWidget.h"
 #include "ThinkingSectionWidget.h"
+#include "ToolCallSectionWidget.h"
+#include "BuiltinTools.h"
 #include "ThemeManager.h"
 #include "Theme.h"
 
@@ -180,9 +182,13 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     connect(m_attachButton, &QToolButton::clicked, this, &ChatWidget::onAttachClicked);
     toolLayout->addWidget(m_attachButton);
 
-    // "Tools" dropdown: checkable Search-the-web / Thinking toggles. A
-    // persistent QMenu (built once, not per-click) since checked state has
-    // to survive being closed and reopened.
+    // "Tools" dropdown: checkable toggles for each built-in tool-calling
+    // tool (see BuiltinTools.h) plus Thinking. A persistent QMenu (built
+    // once, not per-click) since checked state has to survive being closed
+    // and reopened. Checking one of the tool toggles just makes that tool
+    // available to the model (via buildToolDefinitions()) — the model
+    // itself decides per-reply whether to actually call it, this doesn't
+    // trigger anything eagerly.
     m_toolsButton = new QToolButton;
     m_toolsButton->setObjectName("toolsButton");
     m_toolsButton->setCursor(Qt::PointingHandCursor);
@@ -195,6 +201,16 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_webSearchAction->setChecked(m_webSearchEnabled);
     connect(m_webSearchAction, &QAction::toggled, this, &ChatWidget::onWebSearchToggled);
 
+    m_calculatorAction = toolsMenu->addAction("Calculator");
+    m_calculatorAction->setCheckable(true);
+    m_calculatorAction->setChecked(m_calculatorEnabled);
+    connect(m_calculatorAction, &QAction::toggled, this, &ChatWidget::onCalculatorToggled);
+
+    m_dateTimeAction = toolsMenu->addAction("Current date && time");
+    m_dateTimeAction->setCheckable(true);
+    m_dateTimeAction->setChecked(m_dateTimeEnabled);
+    connect(m_dateTimeAction, &QAction::toggled, this, &ChatWidget::onDateTimeToolToggled);
+
     m_thinkingAction = toolsMenu->addAction("Thinking");
     m_thinkingAction->setCheckable(true);
     m_thinkingAction->setChecked(m_thinkingEnabled);
@@ -203,6 +219,10 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_toolsButton->setMenu(toolsMenu);
     toolLayout->addWidget(m_toolsButton);
     updateToolsButtonAppearance(); // sets the initial "Tools" label
+
+    m_toolExecutor = new ToolExecutor(this);
+    connect(m_toolExecutor, &ToolExecutor::toolCallCompleted, this, &ChatWidget::onToolCallCompleted);
+    connect(m_toolExecutor, &ToolExecutor::allToolCallsCompleted, this, &ChatWidget::onAllToolCallsCompleted);
 
     toolLayout->addStretch(1);
 
@@ -279,13 +299,6 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     // than going straight to Ollama.
     m_voiceAutoSend = QSettings().value("chat/voiceAutoSend", false).toBool();
 
-    connect(&m_webSearchClient, &WebSearchClient::searchCompleted, this,
-            [this](const QString &query, const QString &resultsText) {
-                Q_UNUSED(query);
-                m_pendingUserMessage.webSearchContext = resultsText;
-                finalizeAndSendUserMessage(m_pendingUserMessage, m_pendingWasNewConversation);
-            });
-
     cardLayout->addWidget(toolRow);
 
     inputOuterLayout->addWidget(m_inputCard);
@@ -297,6 +310,7 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
 
     connect(m_ollamaClient, &OllamaClient::chatDelta, this, &ChatWidget::onChatDelta);
     connect(m_ollamaClient, &OllamaClient::chatThinkingDelta, this, &ChatWidget::onChatThinkingDelta);
+    connect(m_ollamaClient, &OllamaClient::chatToolCalls, this, &ChatWidget::onChatToolCalls);
     connect(m_ollamaClient, &OllamaClient::chatDone, this, &ChatWidget::onChatDone);
     connect(m_ollamaClient, &OllamaClient::chatError, this, &ChatWidget::onChatError);
     connect(m_ollamaClient, &OllamaClient::chatUsage, this, &ChatWidget::onChatUsage);
@@ -555,9 +569,31 @@ void ChatWidget::renderConversation()
     // assistant entry yet to anchor the live bubble to. That's handled
     // after the loop below instead of inside it.
     const bool hasLiveStream = m_streams.contains(m_activeConversationId);
+    // A pure tool-call request message (empty content, non-empty toolCalls)
+    // is never the live placeholder — that's always the plain assistant
+    // message updateStreamingAssistantMessage() lazily creates on the first
+    // real *content* token of whichever round ends up answering. See the
+    // tool-call folding logic in the loop below for how such a message (and
+    // any "tool" role results after it) gets displayed instead.
     const bool lastMessageIsLiveAssistant = hasLiveStream && !conv->messages.isEmpty()
-        && conv->messages.last().role == "assistant";
+        && conv->messages.last().role == "assistant" && conv->messages.last().toolCalls.isEmpty();
     const int liveMessageIndex = lastMessageIsLiveAssistant ? conv->messages.size() - 1 : -1;
+
+    // Accumulates a run of [assistant tool_calls, tool, tool, ...] messages
+    // (possibly several rounds' worth) as they're encountered, so they can
+    // be attached as ToolCallSectionWidgets above the *next* real assistant
+    // bubble — the same "collapsible trace above the answer" shape the live
+    // round-trip builds in handleToolCalls(), just reconstructed from
+    // persisted history instead of built as it happens. Neither message
+    // type gets a bubble of its own.
+    struct PendingToolCall
+    {
+        QString name;
+        QJsonObject arguments;
+        QString resultText;
+        bool resolved = false;
+    };
+    QVector<PendingToolCall> pendingToolCalls;
 
     // Note: past "thinking" traces aren't persisted to disk (see
     // Conversation.h / ChatMessage — there's no field for it), so reloading
@@ -573,7 +609,44 @@ void ChatWidget::renderConversation()
             continue;
         }
         const ChatMessage &msg = conv->messages[i];
-        appendMessageBubble(msg.role, msg.content, nullptr, msg.attachmentNames, i, msg.timestamp);
+
+        if (msg.role == "assistant" && !msg.toolCalls.isEmpty() && msg.content.isEmpty()) {
+            for (const QJsonValue &callValue : msg.toolCalls) {
+                const BuiltinTools::ParsedToolCall parsed = BuiltinTools::parseToolCall(callValue.toObject());
+                pendingToolCalls.append(PendingToolCall{parsed.name, parsed.arguments, QString(), false});
+            }
+            continue;
+        }
+
+        if (msg.role == "tool") {
+            for (PendingToolCall &call : pendingToolCalls) {
+                if (!call.resolved) {
+                    call.resultText = msg.content;
+                    call.resolved = true;
+                    break;
+                }
+            }
+            continue;
+        }
+
+        QVBoxLayout *bubbleLayout = nullptr;
+        appendMessageBubble(msg.role, msg.content, &bubbleLayout, msg.attachmentNames, i, msg.timestamp);
+
+        // Only an assistant bubble can sensibly host a "here's what I
+        // called before answering" trace — a user message interrupting a
+        // pending tool-call run (e.g. the previous turn was stopped mid
+        // tool execution) just silently drops it rather than attaching it
+        // somewhere that wouldn't make sense.
+        if (msg.role == "assistant" && !pendingToolCalls.isEmpty() && bubbleLayout) {
+            int insertPos = 0;
+            for (const PendingToolCall &call : pendingToolCalls) {
+                auto *widget = new ToolCallSectionWidget(call.name, call.arguments);
+                if (call.resolved)
+                    widget->setResult(call.resultText);
+                bubbleLayout->insertWidget(insertPos++, widget);
+            }
+        }
+        pendingToolCalls.clear();
     }
 
     // Thinking-only phase: there's a live stream but no assistant message in
@@ -975,9 +1048,12 @@ void ChatWidget::abortActiveStreamIfAny()
     m_store->finalizeStreamingAssistantMessage(conversationId);
 
     m_streams.remove(conversationId);
+    m_toolRoundCountByConversation.remove(conversationId);
+    m_pendingToolCallsByConversation.remove(conversationId);
     m_streamingBrowser = nullptr;
     m_streamingBubbleLayout = nullptr;
     m_streamingThinkingWidget = nullptr;
+    m_streamingToolCallWidgets.clear();
 
     setInputEnabled(true);
     setSendButtonBusy(false);
@@ -1044,20 +1120,6 @@ void ChatWidget::onSendClicked()
     m_pendingAttachments.clear();
     rebuildAttachmentsBar();
 
-    if (m_webSearchEnabled && !text.isEmpty()) {
-        // Search first, then finalize once results (or a definitive "no
-        // results") come back — see the WebSearchClient::searchCompleted
-        // connection in the constructor. The bubble/history append is
-        // deliberately deferred to finalizeAndSendUserMessage() so the
-        // search results can be attached to the *same* message rather than
-        // arriving as a separate, confusing follow-up.
-        setInputEnabled(false);
-        m_pendingUserMessage = userMessage;
-        m_pendingWasNewConversation = wasNewConversation;
-        m_webSearchClient.search(text);
-        return;
-    }
-
     finalizeAndSendUserMessage(userMessage, wasNewConversation);
 }
 
@@ -1081,6 +1143,38 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
     if (!conv)
         return;
 
+    const QString conversationId = m_activeConversationId;
+
+    // Reserve an empty assistant bubble now, and keep both its content
+    // widget and its layout — the latter is where a ThinkingSectionWidget
+    // or ToolCallSectionWidget gets inserted later, above the answer text,
+    // if this turn ends up thinking and/or calling a tool (see
+    // onChatThinkingDelta()/handleToolCalls()). A fresh StreamState
+    // replaces any stale leftover (shouldn't normally exist — sending a new
+    // turn only happens once the previous one for this conversation has
+    // finished/been stopped).
+    m_streams[conversationId] = StreamState();
+    m_streams[conversationId].baselineUsedTokens = m_usedTokensByConversation.value(conversationId, 0);
+    m_streamingThinkingWidget = nullptr;
+    m_streamingToolCallWidgets.clear();
+    m_toolRoundCountByConversation.remove(conversationId);
+    m_streamingBrowser = appendMessageBubble("assistant", QString(), &m_streamingBubbleLayout);
+    setInputEnabled(false);
+    setSendButtonBusy(true);
+
+    sendTurnRequest(conversationId);
+}
+
+void ChatWidget::sendTurnRequest(const QString &conversationId)
+{
+    const Conversation *conv = m_store->find(conversationId);
+    if (!conv)
+        return;
+
+    // Re-read fresh every call rather than passed/cached from the caller —
+    // this is what picks up the assistant tool_calls + tool result
+    // messages handleToolCalls()/onAllToolCallsCompleted() append between
+    // rounds of the same turn.
     QJsonArray apiMessages;
     for (const ChatMessage &m : conv->messages) {
         // attachmentsContext/webSearchContext were extracted once (at
@@ -1096,24 +1190,15 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
         QJsonObject obj{{"role", m.role}, {"content", apiContent}};
         if (!m.imagesBase64.isEmpty())
             obj["images"] = QJsonArray::fromStringList(m.imagesBase64);
+        // Resent verbatim so the model sees exactly what it itself asked
+        // for — see Conversation::toolCalls' own comment. The matching
+        // "tool" role result message(s) that follow need no special-casing
+        // here: role/content above already builds them correctly, same as
+        // any other message.
+        if (!m.toolCalls.isEmpty())
+            obj["tool_calls"] = m.toolCalls;
         apiMessages.append(obj);
     }
-
-    const QString conversationId = m_activeConversationId;
-
-    // Reserve an empty assistant bubble now, and keep both its content
-    // widget and its layout — the latter is where a ThinkingSectionWidget
-    // gets inserted later, above the answer text, if this turn ends up
-    // producing any thinking tokens at all (see onChatThinkingDelta).
-    // A fresh StreamState replaces any stale leftover (shouldn't normally
-    // exist — sending a new turn only happens once the previous one for
-    // this conversation has finished/been stopped).
-    m_streams[conversationId] = StreamState();
-    m_streams[conversationId].baselineUsedTokens = m_usedTokensByConversation.value(conversationId, 0);
-    m_streamingThinkingWidget = nullptr;
-    m_streamingBrowser = appendMessageBubble("assistant", QString(), &m_streamingBubbleLayout);
-    setInputEnabled(false);
-    setSendButtonBusy(true);
 
     // 0 (not set/unchecked) omits options.num_ctx entirely rather than
     // sending a literal 0 — see OllamaClient::sendChatMessage's comment for
@@ -1152,6 +1237,13 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
     // model recorded yet falls back to whatever the combo currently shows.
     const QString model = !conv->model.isEmpty() ? conv->model : m_modelCombo->currentText();
 
+    // Caps how many tool-call rounds a single turn can chain through before
+    // forcing a real answer — see kMaxToolCallRounds' own comment and
+    // m_toolRoundCountByConversation.
+    static constexpr int kMaxToolCallRounds = 4;
+    const int toolRound = m_toolRoundCountByConversation.value(conversationId, 0);
+    const QJsonArray tools = toolRound < kMaxToolCallRounds ? buildToolDefinitions() : QJsonArray();
+
     // Submitted to the queue rather than sent straight to OllamaClient —
     // see ChatQueue's header comment. If nothing else is running, this
     // starts immediately (turnStarted fires synchronously, before enqueue()
@@ -1166,7 +1258,97 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
     turn.customNumCtx = customNumCtx;
     turn.genOptions = genOptions;
     turn.keepAliveSeconds = conv->keepAliveSeconds;
+    turn.tools = tools;
     m_chatQueue->enqueue(turn);
+}
+
+QJsonArray ChatWidget::buildToolDefinitions() const
+{
+    QJsonArray tools;
+    if (m_webSearchEnabled)
+        tools.append(BuiltinTools::webSearchDefinition());
+    if (m_calculatorEnabled)
+        tools.append(BuiltinTools::calculateDefinition());
+    if (m_dateTimeEnabled)
+        tools.append(BuiltinTools::currentDateTimeDefinition());
+    return tools;
+}
+
+void ChatWidget::handleToolCalls(const QString &conversationId, const QJsonArray &toolCalls)
+{
+    // Persisted first and exactly as Ollama emitted it — see
+    // Conversation::toolCalls' own comment on why this has to round-trip
+    // verbatim on the next request.
+    ChatMessage callMessage;
+    callMessage.role = "assistant";
+    callMessage.timestamp = QDateTime::currentDateTime();
+    callMessage.toolCalls = toolCalls;
+    m_store->appendMessage(conversationId, callMessage);
+
+    m_toolRoundCountByConversation[conversationId] = m_toolRoundCountByConversation.value(conversationId, 0) + 1;
+
+    if (conversationId == m_activeConversationId && m_streamingBubbleLayout) {
+        if (m_streamingThinkingWidget)
+            m_streamingThinkingWidget->setThinking(false);
+
+        m_streamingToolCallWidgets.clear();
+        // Just above the (still-empty) answer text, which is always the
+        // last item in the bubble layout — see appendMessageBubble(). Later
+        // rounds' widgets land between earlier rounds' and the answer text,
+        // preserving chronological top-to-bottom order.
+        int insertPos = m_streamingBubbleLayout->count() - 1;
+        for (const QJsonValue &callValue : toolCalls) {
+            const BuiltinTools::ParsedToolCall parsed = BuiltinTools::parseToolCall(callValue.toObject());
+            auto *widget = new ToolCallSectionWidget(parsed.name, parsed.arguments);
+            m_streamingBubbleLayout->insertWidget(insertPos++, widget);
+            m_streamingToolCallWidgets.append(widget);
+        }
+        scrollToBottom();
+    }
+
+    m_toolExecutor->executeToolCalls(conversationId, toolCalls);
+}
+
+void ChatWidget::onToolCallCompleted(const QString &conversationId, int callIndex, const QString &toolName,
+                                      const QJsonObject &arguments, const QString &resultText)
+{
+    Q_UNUSED(toolName);
+    Q_UNUSED(arguments);
+    if (conversationId != m_activeConversationId)
+        return;
+    if (callIndex >= 0 && callIndex < m_streamingToolCallWidgets.size())
+        m_streamingToolCallWidgets[callIndex]->setResult(resultText);
+}
+
+void ChatWidget::onAllToolCallsCompleted(const QString &conversationId, const QVector<ToolCallResult> &results)
+{
+    for (const ToolCallResult &result : results) {
+        ChatMessage toolMessage;
+        toolMessage.role = "tool";
+        toolMessage.content = result.resultText;
+        toolMessage.toolName = result.name;
+        toolMessage.timestamp = QDateTime::currentDateTime();
+        m_store->appendMessage(conversationId, toolMessage);
+    }
+
+    continueTurnAfterToolResults(conversationId);
+}
+
+void ChatWidget::continueTurnAfterToolResults(const QString &conversationId)
+{
+    auto it = m_streams.find(conversationId);
+    if (it == m_streams.end())
+        return; // turn was stopped/errored while tools were still executing — nothing to continue
+
+    StreamState &st = it.value();
+    st.buffer.clear();
+    st.thinkingBuffer.clear();
+    st.isThinkingActive = false;
+    st.startMs = 0;
+    st.tokenCount = 0;
+    st.baselineUsedTokens = m_usedTokensByConversation.value(conversationId, 0);
+
+    sendTurnRequest(conversationId);
 }
 
 void ChatWidget::editMessage(int messageIndex, const QString &newText)
@@ -1359,12 +1541,29 @@ void ChatWidget::flushStreamRender()
     updateContextUsageDisplay();
 }
 
+void ChatWidget::onChatToolCalls(const QString &conversationId, const QJsonArray &toolCalls)
+{
+    m_pendingToolCallsByConversation[conversationId] = toolCalls;
+}
+
 void ChatWidget::onChatDone(const QString &conversationId)
 {
+    const QJsonArray toolCalls = m_pendingToolCallsByConversation.take(conversationId);
+    if (!toolCalls.isEmpty()) {
+        // The turn isn't finished — handleToolCalls() either continues it
+        // itself (once tool execution resolves) or, if the round cap was
+        // hit, sendTurnRequest() omits "tools" on the next round so the
+        // model's own following chatDone() arrives with no tool_calls and
+        // falls through to the normal-finish path below instead.
+        handleToolCalls(conversationId, toolCalls);
+        return;
+    }
+
     m_store->finalizeStreamingAssistantMessage(conversationId);
 
     const StreamState st = m_streams.value(conversationId);
     m_streams.remove(conversationId);
+    m_toolRoundCountByConversation.remove(conversationId);
 
     if (conversationId != m_activeConversationId)
         return; // background turn finished; its bubble will render as static/final next time this conversation is shown
@@ -1391,6 +1590,7 @@ void ChatWidget::onChatDone(const QString &conversationId)
     m_streamingBrowser = nullptr;
     m_streamingBubbleLayout = nullptr;
     m_streamingThinkingWidget = nullptr;
+    m_streamingToolCallWidgets.clear();
     setInputEnabled(true);
     setSendButtonBusy(false);
     m_inputEdit->setFocus();
@@ -1399,6 +1599,8 @@ void ChatWidget::onChatDone(const QString &conversationId)
 void ChatWidget::onChatError(const QString &conversationId, const QString &message)
 {
     m_streams.remove(conversationId);
+    m_toolRoundCountByConversation.remove(conversationId);
+    m_pendingToolCallsByConversation.remove(conversationId);
 
     if (conversationId != m_activeConversationId)
         return; // background turn failed; whatever it streamed before failing is already persisted
@@ -1411,6 +1613,7 @@ void ChatWidget::onChatError(const QString &conversationId, const QString &messa
     m_streamingBrowser = nullptr;
     m_streamingBubbleLayout = nullptr;
     m_streamingThinkingWidget = nullptr;
+    m_streamingToolCallWidgets.clear();
     setInputEnabled(true);
     setSendButtonBusy(false);
 }
@@ -1619,6 +1822,18 @@ void ChatWidget::onWebSearchToggled(bool enabled)
     updateToolsButtonAppearance();
 }
 
+void ChatWidget::onCalculatorToggled(bool enabled)
+{
+    m_calculatorEnabled = enabled;
+    updateToolsButtonAppearance();
+}
+
+void ChatWidget::onDateTimeToolToggled(bool enabled)
+{
+    m_dateTimeEnabled = enabled;
+    updateToolsButtonAppearance();
+}
+
 void ChatWidget::onThinkingToggled(bool enabled)
 {
     m_thinkingEnabled = enabled;
@@ -1630,6 +1845,10 @@ void ChatWidget::updateToolsButtonAppearance()
     QStringList activeParts;
     if (m_webSearchEnabled)
         activeParts << "Web";
+    if (m_calculatorEnabled)
+        activeParts << "Calc";
+    if (m_dateTimeEnabled)
+        activeParts << "Date/time";
     if (!m_thinkingEnabled)
         activeParts << "No thinking";
 

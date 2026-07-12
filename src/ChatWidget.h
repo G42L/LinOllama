@@ -17,11 +17,11 @@
 #include "ChatQueue.h"
 #include "ChatInputEdit.h"
 #include "AutoHeightTextBrowser.h"
-#include "WebSearchClient.h"
 #include "VoiceRecorder.h"
 #include "WhisperManager.h"
 #include "MapEmbedWidget.h"
 #include "HtmlEmbedWidget.h"
+#include "ToolExecutor.h" // for ToolCallResult, used by the onAllToolCallsCompleted() slot signature
 
 class QVBoxLayout;
 class QHBoxLayout;
@@ -29,6 +29,7 @@ class QFrame;
 class QMenu;
 class QAction;
 class ThinkingSectionWidget;
+class ToolCallSectionWidget;
 class ThemeManager;
 class QTimer;
 
@@ -153,6 +154,8 @@ private slots:
     void onAttachClicked();
     void onJumpToClicked();
     void onWebSearchToggled(bool enabled);
+    void onCalculatorToggled(bool enabled);
+    void onDateTimeToolToggled(bool enabled);
     void onThinkingToggled(bool enabled);
     void onVoicePressed();
     void onVoiceReleased();
@@ -165,6 +168,11 @@ private slots:
     void onWhisperTranscriptionProgress(const QString &partialText);
     void onChatDelta(const QString &conversationId, const QString &tokenText);
     void onChatThinkingDelta(const QString &conversationId, const QString &tokenText);
+    // Stashes toolCalls for onChatDone() (arrives just before it, from the
+    // same NDJSON line — see OllamaClient::chatToolCalls()) rather than
+    // handling it here directly, so onChatDone() has one single place that
+    // decides whether a finished turn was a normal answer or a tool call.
+    void onChatToolCalls(const QString &conversationId, const QJsonArray &toolCalls);
     void onChatDone(const QString &conversationId);
     void onChatError(const QString &conversationId, const QString &message);
     void onChatUsage(const QString &conversationId, int promptTokens, int completionTokens);
@@ -172,6 +180,13 @@ private slots:
     void onModelMetadataFetched(const QString &model, const ModelMetadata &metadata);
     void onModelComboChanged(int index);
     void onKeepAliveComboChanged(int index);
+
+    // ToolExecutor's own progress signals — see handleToolCalls() for how a
+    // turn ends up here, and continueTurnAfterToolResults() for what
+    // happens once every call in the batch is done.
+    void onToolCallCompleted(const QString &conversationId, int callIndex, const QString &toolName,
+                              const QJsonObject &arguments, const QString &resultText);
+    void onAllToolCallsCompleted(const QString &conversationId, const QVector<ToolCallResult> &results);
 
     // ChatQueue's own progress signals — see setModelOptimizationEnabled()
     // and streamAssistantReplyForCurrentHistory() for how turns get there.
@@ -296,23 +311,53 @@ private:
 
     // Second half of sending a message: persists it, renders its bubble,
     // builds the API request from full history (including every message's
-    // attachmentsContext/webSearchContext), and starts streaming. Split out
-    // from onSendClicked() because when the "Search the web" tool is on,
-    // there's an async search round-trip to wait on first — see
-    // onSendClicked()/onWebSearchToggled().
+    // attachmentsContext/webSearchContext), and starts streaming.
     void finalizeAndSendUserMessage(ChatMessage userMessage, bool wasNewConversation);
     // Builds the API request from the conversation's *current* stored
     // history and starts streaming a reply — the tail end of
     // finalizeAndSendUserMessage(), factored out so editMessage()/
     // retryMessage() can reuse it after truncating history instead of
-    // appending a new message.
+    // appending a new message. Reserves a fresh bubble and StreamState,
+    // then hands off to sendTurnRequest() — the part that's also reused,
+    // without a fresh bubble, by continueTurnAfterToolResults().
     void streamAssistantReplyForCurrentHistory();
+    // Builds one /api/chat request from conversationId's *current* stored
+    // history (re-read fresh every call, not cached — this is what picks up
+    // tool-call/tool messages appended between rounds) and enqueues it via
+    // ChatQueue. Shared by streamAssistantReplyForCurrentHistory() (the
+    // first round of a turn) and continueTurnAfterToolResults() (every
+    // round after a tool call) — neither owns any bubble/StreamState setup
+    // itself, that's the caller's job.
+    void sendTurnRequest(const QString &conversationId);
     // Cuts the *currently displayed* conversation's in-flight reply short,
     // if any (same cleanup as onStopClicked(), used here so editing/
     // retrying an earlier message can't race with a stream still writing
     // into a later bubble that's about to be removed). Never touches a
     // different conversation's background stream.
     void abortActiveStreamIfAny();
+
+    // Assembles the /api/chat "tools" array from whichever built-in tools
+    // are currently enabled (see m_webSearchEnabled/m_calculatorEnabled/
+    // m_dateTimeEnabled and BuiltinTools.h) — empty if none are, which
+    // sendTurnRequest() then omits from the request entirely rather than
+    // sending an empty array.
+    QJsonArray buildToolDefinitions() const;
+    // The model decided to call one or more tools instead of (or before)
+    // answering — see OllamaClient::chatToolCalls(), consumed here from
+    // onChatDone(). Persists the assistant's own tool-call request message,
+    // shows a "Calling <tool>…" ToolCallSectionWidget per call above the
+    // (still-empty) answer text if this is the active conversation, and
+    // hands the batch to m_toolExecutor. The turn is NOT finished at this
+    // point — onAllToolCallsCompleted() is what continues it.
+    void handleToolCalls(const QString &conversationId, const QJsonArray &toolCalls);
+    // Resets the per-round streaming state (answer/thinking buffers, tok/s
+    // timing) and calls sendTurnRequest() again for the same bubble — the
+    // continuation of a turn after handleToolCalls()'s tool results are all
+    // in. No-ops if the turn was stopped/errored while tools were still
+    // executing (m_streams no longer has an entry for conversationId by
+    // then), so a late-arriving tool result can never resurrect an
+    // already-cancelled turn.
+    void continueTurnAfterToolResults(const QString &conversationId);
 
     // Truncates the conversation to just before messageIndex, re-appends
     // that message with newText as its content (keeping its original
@@ -456,14 +501,46 @@ private:
     bool m_sendButtonFilled = false; // false = flat (default), true = classic accent pill — see setSendButtonFilled()
     bool m_voiceAutoSend = false; // false = fill box for review (default), true = send immediately — see setVoiceAutoSend()
 
-    // "Tools" dropdown (right of the attach button): checkable Search-the-web
-    // and Thinking toggles. Persistent QMenu (not rebuilt per click, unlike
-    // the "Jump to" menu) since its checked state has to survive being closed.
+    // "Tools" dropdown (right of the attach button): checkable toggles for
+    // each built-in tool-calling tool (see BuiltinTools.h) plus Thinking.
+    // Persistent QMenu (not rebuilt per click, unlike the "Jump to" menu)
+    // since its checked state has to survive being closed. Enabling one of
+    // the tool toggles doesn't search/calculate/etc. eagerly — it just adds
+    // that tool to the /api/chat "tools" array (see buildToolDefinitions()),
+    // leaving the model itself to decide whether to actually call it.
     QToolButton *m_toolsButton = nullptr;
     QAction *m_webSearchAction = nullptr;
+    QAction *m_calculatorAction = nullptr;
+    QAction *m_dateTimeAction = nullptr;
     QAction *m_thinkingAction = nullptr;
     bool m_webSearchEnabled = false; // off by default, per spec
+    bool m_calculatorEnabled = false;
+    bool m_dateTimeEnabled = false;
     bool m_thinkingEnabled = true;   // matches this app's prior always-on behavior
+
+    // Executes whatever built-in tools the model actually decided to call
+    // (see handleToolCalls()/onAllToolCallsCompleted()) — owned here,
+    // constructed once in the constructor.
+    ToolExecutor *m_toolExecutor = nullptr;
+    // Live ToolCallSectionWidget(s) for the *current* round of the active
+    // conversation's in-flight turn, indexed exactly like ToolExecutor's own
+    // callIndex — see handleToolCalls() (populates this) and
+    // onToolCallCompleted() (updates the matching entry once its result is
+    // in). Cleared at the start of every round, including the very first
+    // (non-tool) one, so a stale index from an earlier round/turn can never
+    // be misapplied to the wrong widget.
+    QVector<ToolCallSectionWidget *> m_streamingToolCallWidgets;
+    // How many tool-call rounds the active turn has already gone through,
+    // per conversation — see kMaxToolCallRounds in ChatWidget.cpp.
+    // Guards against a model that keeps calling tools without ever
+    // actually answering: once the cap is hit, sendTurnRequest() omits the
+    // "tools" field entirely for that round, forcing a real answer instead
+    // of another call. Reset (removed) whenever a turn starts or finishes
+    // normally.
+    QHash<QString, int> m_toolRoundCountByConversation;
+    // Set by onChatToolCalls(), consumed (take()'d) by onChatDone() right
+    // after — see that slot's own comment for why it's split this way.
+    QHash<QString, QJsonArray> m_pendingToolCallsByConversation;
 
     // Push-to-talk mic button, between the model combo and Send. Recording
     // is VoiceRecorder's job; turning the resulting .wav into text is
@@ -475,13 +552,6 @@ private:
     // onWhisperTranscriptionFinished() fires (transcription is async), so it
     // can be deleted once WhisperManager is done with it either way.
     QString m_pendingVoiceFilePath;
-
-    // Holds the message being sent while an async web search is in flight
-    // (see onSendClicked()/finalizeAndSendUserMessage()) — unused, empty
-    // when web search is off, since that path finalizes synchronously.
-    ChatMessage m_pendingUserMessage;
-    bool m_pendingWasNewConversation = false;
-    WebSearchClient m_webSearchClient;
 
     // Row of removable chips for files queued via m_attachButton, shown
     // above the input box; hidden entirely while empty.

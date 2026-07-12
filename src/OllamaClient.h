@@ -125,10 +125,18 @@ public:
     // forces an *existing* loaded model out right now, this just changes
     // how long a model this turn loads stays around afterward, decided
     // per-conversation (see Conversation::keepAliveSeconds).
+    //
+    // tools is sent as the request's top-level "tools" field verbatim (see
+    // BuiltinTools::toolDefinitions()) — an empty array (the default) omits
+    // the field entirely, so a conversation with no tools enabled behaves
+    // exactly as if this parameter didn't exist. If the model decides to
+    // call one, its final NDJSON line carries message.tool_calls instead of
+    // (or alongside) message.content — see chatToolCalls() below.
     void sendChatMessage(const QString &conversationId, const QString &model, const QJsonArray &messages,
                           bool think = true, int customNumCtx = 0,
                           const GenerationOptions &genOptions = GenerationOptions(),
-                          int keepAliveSeconds = kKeepAliveUseServerDefault);
+                          int keepAliveSeconds = kKeepAliveUseServerDefault,
+                          const QJsonArray &tools = QJsonArray());
 
     // Aborts the in-flight chat stream for the given conversationId, if any.
     // Safe to call when none is active; doesn't touch any other
@@ -203,6 +211,16 @@ signals:
     // promptTokens + completionTokens is "current context usage in tokens"
     // for that conversation as of now.
     void chatUsage(const QString &conversationId, int promptTokens, int completionTokens);
+
+    // Emitted right before chatDone() (same "alongside" relationship as
+    // chatUsage() above), only when the final NDJSON line carried a
+    // non-empty message.tool_calls — i.e. the model decided to call one or
+    // more tools instead of (or before) answering. toolCalls is Ollama's
+    // own tool_calls array verbatim, one entry per
+    // {"function": {"name", "arguments"}}. Never emitted for a turn that
+    // just answered normally, so callers only need to handle this when it
+    // actually fires rather than checking an empty-array case every time.
+    void chatToolCalls(const QString &conversationId, const QJsonArray &toolCalls);
 
     // One-shot result of fetchModelContextLength(). Emitted even on
     // failure/unknown, with contextLength == 0, so callers don't have to
