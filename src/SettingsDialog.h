@@ -123,6 +123,17 @@ private slots:
     void onOllamaFlashAttentionToggled(bool enabled);
     void onOllamaNumParallelChanged(int value);
 
+    void onPullModelClicked();
+    void onCancelPullClicked();
+    void onModelPullProgress(const QString &model, const QString &status, qint64 completed, qint64 total);
+    void onModelPullFinished(const QString &model, bool success, const QString &error);
+    void onModelDeleted(const QString &model, bool success, const QString &error);
+    // Reacts to OllamaClient::modelsListed — the same periodic /api/tags
+    // poll (see main.cpp's reachabilityTimer) that keeps the model combo
+    // elsewhere in the app current also keeps this list current, so there's
+    // no separate fetch call needed here.
+    void onInstalledModelsListed(const QStringList &modelNames);
+
 private:
     void rebuildLoadedModelsList(const QVector<LoadedModelInfo> &models);
     void clearLoadedModelsList();
@@ -244,4 +255,21 @@ private:
     QLineEdit *m_ollamaKeepAliveEdit = nullptr;
     QCheckBox *m_ollamaFlashAttentionCheck = nullptr;
     QSpinBox *m_ollamaNumParallelSpin = nullptr;
+
+    // Ollama tab's "Models" group — pull new models, delete installed ones.
+    QLineEdit *m_pullModelEdit = nullptr;
+    QPushButton *m_pullButton = nullptr;
+    QPushButton *m_cancelPullButton = nullptr;
+    QProgressBar *m_pullProgressBar = nullptr;
+    QLabel *m_pullStatusLabel = nullptr;
+    // Empty when nothing's pulling — the one thing this UI restricts beyond
+    // what OllamaClient itself allows (which supports one concurrent pull
+    // per distinct model reference): only one pull at a time *from this
+    // dialog*, so there's only ever one progress bar/status line to show.
+    QString m_pullingModel;
+
+    QVBoxLayout *m_installedModelsLayout = nullptr; // rows get inserted/cleared here, same pattern as m_loadedModelsLayout
+    QLabel *m_installedModelsStatusLabel = nullptr;
+    void rebuildInstalledModelsList(const QStringList &modelNames);
+    void clearInstalledModelsList();
 };

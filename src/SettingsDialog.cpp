@@ -34,6 +34,7 @@
 #include <QPainter>
 #include <QLinearGradient>
 #include <iterator>
+#include <QMessageBox>
 
 namespace {
 // Every color the "Theme color" combo (see the Appearance tab) treats as
@@ -380,6 +381,58 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     envLayout->addRow("OLLAMA_NUM_PARALLEL", m_ollamaNumParallelSpin);
 
     ollamaPageLayout->addWidget(envGroup);
+
+    // --- Ollama tab: Models (pull new, delete installed) -------------------
+    auto *modelsGroup = new QGroupBox("Models");
+    auto *modelsGroupLayout = new QVBoxLayout(modelsGroup);
+
+    auto *pullRow = new QHBoxLayout;
+    m_pullModelEdit = new QLineEdit;
+    m_pullModelEdit->setPlaceholderText("e.g. llama3.2, llama3.2:3b, qwen2.5-coder");
+    connect(m_pullModelEdit, &QLineEdit::returnPressed, this, &SettingsDialog::onPullModelClicked);
+    pullRow->addWidget(m_pullModelEdit, /*stretch=*/1);
+    m_pullButton = new QPushButton("Pull");
+    connect(m_pullButton, &QPushButton::clicked, this, &SettingsDialog::onPullModelClicked);
+    pullRow->addWidget(m_pullButton);
+    m_cancelPullButton = new QPushButton("Cancel");
+    m_cancelPullButton->setVisible(false);
+    connect(m_cancelPullButton, &QPushButton::clicked, this, &SettingsDialog::onCancelPullClicked);
+    pullRow->addWidget(m_cancelPullButton);
+    modelsGroupLayout->addLayout(pullRow);
+
+    m_pullStatusLabel = new QLabel;
+    m_pullStatusLabel->setWordWrap(true);
+    m_pullStatusLabel->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    m_pullStatusLabel->setVisible(false);
+    modelsGroupLayout->addWidget(m_pullStatusLabel);
+
+    m_pullProgressBar = new QProgressBar;
+    m_pullProgressBar->setRange(0, 100);
+    m_pullProgressBar->setTextVisible(false);
+    m_pullProgressBar->setFixedHeight(6);
+    m_pullProgressBar->setVisible(false);
+    modelsGroupLayout->addWidget(m_pullProgressBar);
+
+    auto *installedHeading = new QLabel("Installed");
+    installedHeading->setStyleSheet("font-weight: 600; margin-top: 6px;");
+    modelsGroupLayout->addWidget(installedHeading);
+
+    m_installedModelsLayout = new QVBoxLayout;
+    m_installedModelsLayout->setSpacing(4);
+    modelsGroupLayout->addLayout(m_installedModelsLayout);
+
+    m_installedModelsStatusLabel = new QLabel("Loading…");
+    m_installedModelsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
+    m_installedModelsLayout->addWidget(m_installedModelsStatusLabel);
+
+    ollamaPageLayout->addWidget(modelsGroup);
+
+    connect(m_ollamaClient, &OllamaClient::modelsListed, this, &SettingsDialog::onInstalledModelsListed);
+    connect(m_ollamaClient, &OllamaClient::modelPullProgress, this, &SettingsDialog::onModelPullProgress);
+    connect(m_ollamaClient, &OllamaClient::modelPullFinished, this, &SettingsDialog::onModelPullFinished);
+    connect(m_ollamaClient, &OllamaClient::modelDeleted, this, &SettingsDialog::onModelDeleted);
+    m_ollamaClient->refreshStatus(); // forces an immediate /api/tags rather than waiting for main.cpp's periodic poll
+
     ollamaPageLayout->addStretch();
 
     // --- Inputs tab: Microphone ----------------------------------------------
@@ -1186,4 +1239,142 @@ void SettingsDialog::onOllamaNumParallelChanged(int value)
     // stored as 0 either way, ServerController::configuredEnvironmentOverrides()
     // is what actually treats <= 0 as "omit this variable."
     QSettings().setValue("ollamaServer/numParallel", value);
+}
+
+void SettingsDialog::onPullModelClicked()
+{
+    const QString model = m_pullModelEdit->text().trimmed();
+    if (model.isEmpty() || !m_pullingModel.isEmpty())
+        return; // already pulling something from this dialog — see m_pullingModel's own comment
+
+    m_pullingModel = model;
+    m_pullButton->setEnabled(false);
+    m_pullModelEdit->setEnabled(false);
+    m_cancelPullButton->setVisible(true);
+    m_pullStatusLabel->setVisible(true);
+    m_pullStatusLabel->setText(QString("Pulling \"%1\"…").arg(model));
+    m_pullProgressBar->setVisible(true);
+    m_pullProgressBar->setRange(0, 0); // indeterminate until the first progress line gives a real total
+
+    m_ollamaClient->pullModel(model);
+}
+
+void SettingsDialog::onCancelPullClicked()
+{
+    if (m_pullingModel.isEmpty())
+        return;
+    m_ollamaClient->cancelPull(m_pullingModel);
+    // No UI reset here — cancelPull() still ends the stream, so
+    // onModelPullFinished() (with a "cancelled" flavor of error, or none at
+    // all) fires either way and is the single place that resets the UI,
+    // rather than duplicating that reset in two places.
+}
+
+void SettingsDialog::onModelPullProgress(const QString &model, const QString &status, qint64 completed, qint64 total)
+{
+    if (model != m_pullingModel)
+        return; // a pull this dialog isn't tracking (shouldn't normally happen, but cheap to guard)
+
+    if (total > 0) {
+        m_pullProgressBar->setRange(0, 100);
+        m_pullProgressBar->setValue(static_cast<int>((completed * 100) / total));
+        const double completedMB = completed / (1024.0 * 1024.0);
+        const double totalMB = total / (1024.0 * 1024.0);
+        m_pullStatusLabel->setText(QString("%1 — %2 / %3 MB")
+            .arg(status).arg(completedMB, 0, 'f', 1).arg(totalMB, 0, 'f', 1));
+    } else {
+        m_pullProgressBar->setRange(0, 0); // between layers, or a non-download status line ("verifying...", "writing manifest") — nothing byte-based to show
+        m_pullStatusLabel->setText(status);
+    }
+}
+
+void SettingsDialog::onModelPullFinished(const QString &model, bool success, const QString &error)
+{
+    if (model != m_pullingModel)
+        return;
+
+    m_pullStatusLabel->setText(success
+        ? QString("\"%1\" pulled successfully.").arg(model)
+        : QString("Pulling \"%1\" failed: %2").arg(model, error.isEmpty() ? "cancelled" : error));
+    m_pullProgressBar->setVisible(false);
+    m_cancelPullButton->setVisible(false);
+    m_pullButton->setEnabled(true);
+    m_pullModelEdit->setEnabled(true);
+    if (success)
+        m_pullModelEdit->clear();
+    m_pullingModel.clear();
+
+    if (success)
+        m_ollamaClient->refreshStatus(); // picks up the newly-installed model in the list below
+}
+
+void SettingsDialog::onModelDeleted(const QString &model, bool success, const QString &error)
+{
+    if (!success) {
+        // Reuses the pull section's status label rather than adding a
+        // dedicated one — it's already a generic "something happened with
+        // models" status line, just below the pull controls.
+        m_pullStatusLabel->setVisible(true);
+        m_pullStatusLabel->setText(QString("Deleting \"%1\" failed: %2").arg(model, error));
+    }
+    m_ollamaClient->refreshStatus(); // re-fetches the list either way — a successful delete needs the removal reflected, a failed one is just a no-op refresh
+}
+
+void SettingsDialog::onInstalledModelsListed(const QStringList &modelNames)
+{
+    rebuildInstalledModelsList(modelNames);
+}
+
+void SettingsDialog::clearInstalledModelsList()
+{
+    QLayoutItem *item;
+    while ((item = m_installedModelsLayout->takeAt(0)) != nullptr) {
+        if (item->widget())
+            item->widget()->deleteLater();
+        delete item;
+    }
+    m_installedModelsStatusLabel = nullptr;
+}
+
+void SettingsDialog::rebuildInstalledModelsList(const QStringList &modelNames)
+{
+    clearInstalledModelsList();
+
+    if (modelNames.isEmpty()) {
+        m_installedModelsStatusLabel = new QLabel("No models installed.");
+        m_installedModelsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
+        m_installedModelsLayout->addWidget(m_installedModelsStatusLabel);
+        return;
+    }
+
+    for (const QString &name : modelNames) {
+        auto *row = new QWidget;
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+
+        auto *nameLabel = new QLabel(name);
+        nameLabel->setStyleSheet("font-weight: normal;");
+        rowLayout->addWidget(nameLabel, /*stretch=*/1);
+
+        auto *deleteButton = new QPushButton("Delete");
+        deleteButton->setObjectName("dangerButton"); // red styling, same as the conversation-delete confirmation elsewhere
+        connect(deleteButton, &QPushButton::clicked, this, [this, name]() {
+            QMessageBox box(this);
+            box.setIcon(QMessageBox::Warning);
+            box.setWindowTitle("Delete model");
+            box.setText(QString("Delete \"%1\"?").arg(name));
+            box.setInformativeText("This removes it from disk. You'll need to pull it again to use it.");
+            QPushButton *cancelButton = box.addButton(QMessageBox::Cancel);
+            QPushButton *confirmButton = box.addButton("Delete", QMessageBox::DestructiveRole);
+            confirmButton->setObjectName("dangerButton");
+            box.setDefaultButton(cancelButton);
+            box.exec();
+            if (box.clickedButton() != confirmButton)
+                return;
+            m_ollamaClient->deleteModel(name);
+        });
+        rowLayout->addWidget(deleteButton);
+
+        m_installedModelsLayout->addWidget(row);
+    }
 }

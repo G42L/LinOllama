@@ -267,3 +267,104 @@ void OllamaClient::unloadModel(const QString &model)
         emit modelUnloaded(model, ok);
     });
 }
+
+struct OllamaClient::PullStream
+{
+    QNetworkReply *reply = nullptr;
+    QByteArray lineBuffer;
+};
+
+void OllamaClient::pullModel(const QString &model)
+{
+    cancelPull(model); // replace this model's own previous pull, if any — others are untouched
+
+    QUrl url = m_baseUrl;
+    url.setPath("/api/pull");
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+
+    QJsonObject body{{"model", model}, {"stream", true}};
+
+    auto *stream = new PullStream;
+    stream->reply = m_manager.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+    m_pullStreams[model] = stream;
+
+    // Both lambdas capture `stream` directly, not a hash lookup by model —
+    // same reasoning as sendChatMessage()'s ChatStream lambdas: keeps
+    // working correctly even if a later pullModel() for the same model
+    // reference replaces the hash entry first.
+    connect(stream->reply, &QNetworkReply::readyRead, this, [this, model, stream]() {
+        stream->lineBuffer += stream->reply->readAll();
+
+        int newlineIdx;
+        while ((newlineIdx = stream->lineBuffer.indexOf('\n')) != -1) {
+            const QByteArray line = stream->lineBuffer.left(newlineIdx).trimmed();
+            stream->lineBuffer.remove(0, newlineIdx + 1);
+            if (line.isEmpty())
+                continue;
+
+            const QJsonDocument doc = QJsonDocument::fromJson(line);
+            if (!doc.isObject())
+                continue;
+            const QJsonObject obj = doc.object();
+
+            if (obj.contains("error")) {
+                emit modelPullFinished(model, false, obj.value("error").toString());
+                continue;
+            }
+
+            emit modelPullProgress(model, obj.value("status").toString(),
+                                    static_cast<qint64>(obj.value("completed").toDouble()),
+                                    static_cast<qint64>(obj.value("total").toDouble()));
+        }
+    });
+
+    connect(stream->reply, &QNetworkReply::finished, this, [this, model, stream]() {
+        QNetworkReply *reply = stream->reply;
+        const bool cancelled = reply->error() == QNetworkReply::OperationCanceledError;
+        if (reply->error() != QNetworkReply::NoError && !cancelled)
+            emit modelPullFinished(model, false, reply->errorString());
+        else if (!cancelled)
+            emit modelPullFinished(model, true, QString());
+        reply->deleteLater();
+
+        // Same guard as sendChatMessage()'s ChatStream cleanup — only drop
+        // the hash entry if it's still pointing at *this* stream.
+        if (m_pullStreams.value(model) == stream)
+            m_pullStreams.remove(model);
+        delete stream;
+    });
+}
+
+void OllamaClient::cancelPull(const QString &model)
+{
+    PullStream *stream = m_pullStreams.value(model);
+    if (!stream)
+        return;
+    m_pullStreams.remove(model); // see abortChat()'s identical reasoning
+    stream->reply->abort();
+}
+
+void OllamaClient::deleteModel(const QString &model)
+{
+    QUrl url = m_baseUrl;
+    url.setPath("/api/delete");
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+
+    // QNetworkAccessManager has no deleteResource() overload that accepts a
+    // request body, and /api/delete requires one (the model name) — sendCustomRequest()
+    // is the general escape hatch for exactly this kind of "verb Qt doesn't
+    // have a dedicated method for" case.
+    QJsonObject body{{"model", model}};
+    QNetworkReply *reply = m_manager.sendCustomRequest(
+        request, "DELETE", QJsonDocument(body).toJson(QJsonDocument::Compact));
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, model]() {
+        reply->deleteLater();
+        const bool ok = reply->error() == QNetworkReply::NoError;
+        emit modelDeleted(model, ok, ok ? QString() : reply->errorString());
+    });
+}

@@ -171,6 +171,12 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   is written and reloaded automatically; for a plain process this app
   starts, they're just set directly in its environment. A systemd
   **system** service isn't modified (see Limitations).
+- **Pull and delete models** (Settings → Ollama → Models): pull any model
+  reference Ollama itself understands (`llama3.2`, `llama3.2:3b`, ...) with
+  a live progress bar (`/api/pull`, cancellable mid-download), and delete
+  installed ones you no longer want (`/api/delete`, with a confirmation
+  dialog) — no more dropping to the `ollama` CLI just to manage what's
+  installed.
 
 ### 📊 System monitoring
 
@@ -301,9 +307,11 @@ See Limitations if you move this checkout elsewhere afterward.
   `OLLAMA_FLASH_ATTENTION`, and `OLLAMA_NUM_PARALLEL` in its own unit file
   instead. Also: these only apply the next time Ollama is *(re)started* via
   the tray's Start/Stop, not to a server that's already running.
-- **No model pull/delete UI.** You manage which models exist via the
-  `ollama` CLI directly; this app only lets you pick among models Ollama
-  already reports.
+- **Model pull progress is per-layer, not a single combined total.** Ollama's
+  own `/api/pull` stream reports progress one layer at a time (its own
+  reporting granularity, not something this app controls), so the progress
+  bar in Settings → Ollama → Models visibly resets a few times while
+  pulling a multi-layer model rather than climbing smoothly to 100% once.
 - **Map embeds use Google's unofficial, keyless "Embed a map" URL pattern**
   (not the documented, key-required Maps Embed API). No API key needed, but
   it's undocumented behavior that could change without notice. One

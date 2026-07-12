@@ -86,6 +86,28 @@ public:
     // touching the active conversation) and does not call abortChat().
     void unloadModel(const QString &model);
 
+    // Streams POST /api/pull for the given model reference (e.g. "llama3.2"
+    // or "llama3.2:3b" — any tag Ollama itself understands). Progress
+    // arrives via modelPullProgress() as Ollama reports each layer's
+    // download (its NDJSON stream reports one "status" line per layer, not
+    // one combined total, so completed/total reset per layer — see that
+    // signal's own doc), and modelPullFinished() once the stream ends
+    // either way. Calling this again for a model reference already pulling
+    // replaces that pull (same one-per-key semantics as sendChatMessage()),
+    // so a second click just restarts it rather than running two at once.
+    void pullModel(const QString &model);
+    // Aborts an in-flight pull for the given model reference, if any. The
+    // partially-downloaded layers are left on Ollama's side (it resumes
+    // from them on a later pull of the same model, same as its own CLI) —
+    // this only stops the client from waiting on it further.
+    void cancelPull(const QString &model);
+
+    // Hits DELETE /api/delete for the given model. Result arrives via
+    // modelDeleted(); does not touch whether it's currently loaded/running
+    // (Ollama refuses the delete in that case — see modelDeleted()'s error
+    // string, surfaced as-is rather than special-cased).
+    void deleteModel(const QString &model);
+
 signals:
     void reachable(bool isReachable);
     void modelsListed(const QStringList &modelNames);
@@ -115,6 +137,20 @@ signals:
     void loadedModelsListed(const QVector<LoadedModelInfo> &models);
     void modelUnloaded(const QString &model, bool success);
 
+    // status is Ollama's own line verbatim (e.g. "pulling manifest",
+    // "pulling 4f5b8c...", "verifying sha256 digest", "writing manifest") —
+    // shown as-is rather than translated, since it already reads fine as
+    // status text and Ollama doesn't document a fixed enum of values to
+    // switch on. completed/total are only meaningful (both > 0) during a
+    // "pulling <digest>" line, which reports progress for *that one layer*,
+    // not a combined whole-model total — a multi-layer model's progress
+    // bar will visibly reset a few times as each layer starts, which is
+    // Ollama's own reporting granularity, not a bug here.
+    void modelPullProgress(const QString &model, const QString &status, qint64 completed, qint64 total);
+    void modelPullFinished(const QString &model, bool success, const QString &error);
+
+    void modelDeleted(const QString &model, bool success, const QString &error);
+
 private:
     QNetworkAccessManager m_manager;
     QUrl m_baseUrl{QStringLiteral("http://127.0.0.1:11434")};
@@ -130,4 +166,12 @@ private:
     // conversation, so switching which one is displayed doesn't have to
     // touch any of them (see sendChatMessage()/abortChat()).
     QHash<QString, ChatStream *> m_chatStreams;
+
+    // One in-flight /api/pull stream — same NDJSON-over-POST shape as
+    // ChatStream, but pull's progress lines carry byte counts instead of
+    // token content, hence a separate (simpler) struct rather than reusing
+    // ChatStream directly.
+    struct PullStream;
+    // Keyed by model reference, same one-per-key semantics as m_chatStreams.
+    QHash<QString, PullStream *> m_pullStreams;
 };
