@@ -64,6 +64,24 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
 
     topBarLayout->addStretch(1);
 
+    m_ollamaVersionLabel = new QLabel;
+    m_ollamaVersionLabel->setObjectName("ollamaVersionLabel");
+    m_ollamaVersionLabel->setToolTip("Ollama server version");
+    topBarLayout->addWidget(m_ollamaVersionLabel);
+
+    connect(m_ollamaClient, &OllamaClient::serverVersionFetched,
+            this, &MainWindow::onServerVersionFetched);
+    // reachable() already fires on every periodic refreshStatus() poll
+    // (see main.cpp) — piggybacking the version fetch on it means this
+    // stays current if the server restarts on a different build, without
+    // its own separate timer.
+    connect(m_ollamaClient, &OllamaClient::reachable, this, [this](bool isReachable) {
+        if (isReachable)
+            m_ollamaClient->fetchServerVersion();
+        else
+            m_ollamaVersionLabel->clear();
+    });
+
     // --- Sidebar --------------------------------------------------------
     m_sidebar = new QWidget;
     m_sidebar->setObjectName("sidebar");
@@ -267,6 +285,11 @@ void MainWindow::updateWindowIconForTheme()
 void MainWindow::onSidebarToggleClicked()
 {
     setSidebarCollapsed(!m_sidebarCollapsed);
+}
+
+void MainWindow::onServerVersionFetched(const QString &version)
+{
+    m_ollamaVersionLabel->setText(version.isEmpty() ? QString() : QString("v%1").arg(version));
 }
 
 void MainWindow::setSidebarCollapsed(bool collapsed)

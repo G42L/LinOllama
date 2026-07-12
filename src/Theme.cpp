@@ -54,6 +54,12 @@ QToolTip {
     background-color: {{bg}};
 }
 
+#ollamaVersionLabel {
+    background-color: transparent;
+    color: {{secondaryText}};
+    font-size: 11px;
+}
+
 /* --- Sidebar ---------------------------------------------------------- */
 #sidebar {
     background-color: {{sidebarBg}};

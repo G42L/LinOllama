@@ -53,6 +53,12 @@ public:
     // which is the common case of the server just not being started yet).
     void refreshStatus();
 
+    // Hits GET /api/version. Result arrives via serverVersionFetched(); an
+    // empty string there means it couldn't be determined (server
+    // unreachable, or an ancient Ollama build predating this endpoint) —
+    // callers should treat that as "unknown" rather than blocking on it.
+    void fetchServerVersion();
+
     // Streams POST /api/chat with "stream": true. `messages` is a JSON
     // array of {"role", "content"} objects, oldest first — the caller
     // builds this from Conversation::messages. Emits chatThinkingDelta() for
@@ -140,6 +146,7 @@ public:
 signals:
     void reachable(bool isReachable);
     void modelsListed(const QStringList &modelNames);
+    void serverVersionFetched(const QString &version);
 
     void chatDelta(const QString &conversationId, const QString &tokenText);
     // Reasoning-trace tokens for thinking-capable models — arrives before

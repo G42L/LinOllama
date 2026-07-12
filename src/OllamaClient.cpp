@@ -39,6 +39,25 @@ void OllamaClient::refreshStatus()
     });
 }
 
+void OllamaClient::fetchServerVersion()
+{
+    QUrl url = m_baseUrl;
+    url.setPath("/api/version");
+
+    QNetworkReply *reply = m_manager.get(QNetworkRequest(url));
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            emit serverVersionFetched(QString());
+            return;
+        }
+
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        emit serverVersionFetched(doc.object().value("version").toString());
+    });
+}
+
 struct OllamaClient::ChatStream
 {
     QNetworkReply *reply = nullptr;

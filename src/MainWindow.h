@@ -63,6 +63,9 @@ private slots:
     // Toggles the sidebar between shown and fully hidden — see
     // setSidebarCollapsed().
     void onSidebarToggleClicked();
+    // Populates m_ollamaVersionLabel once fetchServerVersion() resolves —
+    // blank (hidden) if the server isn't reachable or predates /api/version.
+    void onServerVersionFetched(const QString &version);
 
 private:
     void refreshSidebar();
@@ -121,6 +124,10 @@ private:
     QToolButton *m_newConversationButton = nullptr;
     QToolButton *m_sidebarToggleButton = nullptr;
     QToolButton *m_settingsButton = nullptr;
+    // Far right of the top bar (after the stretch) — Ollama's own server
+    // version, e.g. "v0.5.4". Hidden (empty text) until fetched, and again
+    // if the server isn't reachable — see onServerVersionFetched().
+    QLabel *m_ollamaVersionLabel = nullptr;
     ChatWidget *m_chatWidget = nullptr;
     StatsStripWidget *m_statsStrip = nullptr;
     QSplitter *m_splitter = nullptr;
