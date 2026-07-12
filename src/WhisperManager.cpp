@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTimer>
+#include <QRegularExpression>
 #include <QDebug>
 
 namespace {
@@ -374,7 +375,21 @@ QString WhisperManager::cleanTranscript(const QByteArray &rawStdout)
     for (QString &line : lines)
         line = line.trimmed();
     lines.removeAll(QString());
-    return lines.join(' ').trimmed();
+    return stripNonSpeechTags(lines.join(' ').trimmed());
+}
+
+QString WhisperManager::stripNonSpeechTags(const QString &text)
+{
+    // Every variant actually observed/documented for whisper.cpp's ggml
+    // models — bracketed, all-caps, describing the segment rather than
+    // transcribing it. Case-insensitive and tolerant of "_"/" " inside the
+    // tag (models are inconsistent about which they use).
+    static const QRegularExpression tagPattern(
+        R"(\[\s*(BLANK_AUDIO|SILENCE|NO_SPEECH|INAUDIBLE|MUSIC|NOISE)\s*\])",
+        QRegularExpression::CaseInsensitiveOption);
+    QString cleaned = text;
+    cleaned.remove(tagPattern);
+    return cleaned.simplified();
 }
 
 QString WhisperManager::extractDiagnosticLine(const QString &stdErr)
@@ -631,7 +646,7 @@ void WhisperManager::sendNextQueuedChunk()
         } else {
             // whisper-server's /inference responds {"text": "..."} by default.
             const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
-            const QString text = doc.object().value("text").toString().trimmed();
+            const QString text = stripNonSpeechTags(doc.object().value("text").toString().trimmed());
             emit liveChunkTranscribed(text, chunk.isFinalChunk, true, QString());
         }
 

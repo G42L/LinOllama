@@ -608,6 +608,22 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     voiceAutoSendHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
     whisperLayout->addWidget(voiceAutoSendHint);
 
+    m_liveTranscriptionCheck = new QCheckBox("Enable live transcription (while still talking)");
+    const bool liveTranscriptionEnabled = QSettings().value("voice/liveTranscriptionEnabled", false).toBool();
+    m_liveTranscriptionCheck->setChecked(liveTranscriptionEnabled);
+    connect(m_liveTranscriptionCheck, &QCheckBox::toggled,
+            this, &SettingsDialog::onLiveTranscriptionToggled);
+    whisperLayout->addWidget(m_liveTranscriptionCheck);
+
+    auto *liveTranscriptionHint = new QLabel(
+        "Off (default): the mic button transcribes once, on release, same as above. On: it streams "
+        "text into the message box in short chunks as you talk, via a separate whisper-server "
+        "process — requires that binary to be built alongside whisper-cli (see the status line "
+        "below); has no effect without it.");
+    liveTranscriptionHint->setWordWrap(true);
+    liveTranscriptionHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    whisperLayout->addWidget(liveTranscriptionHint);
+
     whisperLayout->addSpacing(10); // visual break before the binary/model-location controls below
 
     m_whisperStatusLabel = new QLabel;
@@ -896,6 +912,15 @@ void SettingsDialog::onVoiceAutoSendToggled(bool enabled)
     emit voiceAutoSendChanged(enabled);
 }
 
+void SettingsDialog::onLiveTranscriptionToggled(bool enabled)
+{
+    // No live-signal round trip to ChatWidget needed — see
+    // m_liveTranscriptionCheck's own comment: it's read fresh from
+    // QSettings the next time the mic button is pressed, not cached
+    // anywhere in the meantime.
+    QSettings().setValue("voice/liveTranscriptionEnabled", enabled);
+}
+
 void SettingsDialog::onContextLengthEnabledToggled(bool enabled)
 {
     QSettings().setValue("chat/useCustomContextLength", enabled);
@@ -1081,6 +1106,13 @@ void SettingsDialog::refreshWhisperStatusLabel()
     if (!m_whisperManager)
         return;
 
+    // The checkbox itself stays checkable regardless — its setting persists
+    // even while temporarily grayed out, so it's still there, already
+    // ticked, the moment a server binary does become available (no need to
+    // remember to come back and re-enable it).
+    const bool serverAvailable = m_whisperManager->isServerBinaryAvailable();
+    m_liveTranscriptionCheck->setEnabled(serverAvailable);
+
     if (!m_whisperManager->isBinaryAvailable()) {
         m_whisperStatusLabel->setText(
             "whisper-cli not found — build whisper.cpp or point at an existing binary below.");
@@ -1090,12 +1122,9 @@ void SettingsDialog::refreshWhisperStatusLabel()
     const QString modelsDir = m_whisperManager->modelsDir().isEmpty()
         ? "(not set yet — pick one, or download a model to create a default)"
         : m_whisperManager->modelsDir();
-    // Live transcription just silently isn't available without this one —
-    // no separate on/off toggle to explain, so "found" vs. "not found" is
-    // the whole story here.
-    const QString liveStatus = m_whisperManager->isServerBinaryAvailable()
-        ? QString("found (%1) — live transcription while recording is on").arg(m_whisperManager->serverBinaryPath())
-        : "not found — live transcription while recording is off (push-to-talk still works)";
+    const QString liveStatus = serverAvailable
+        ? QString("found (%1)").arg(m_whisperManager->serverBinaryPath())
+        : "not found (see \"Enable live transcription\" above)";
     m_whisperStatusLabel->setText(
         QString("Binary: %1\nModels folder: %2\nLive server (whisper-server): %3")
             .arg(m_whisperManager->binaryPath(), modelsDir, liveStatus));

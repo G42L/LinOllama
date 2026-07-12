@@ -195,6 +195,7 @@ void VoiceRecorder::startRecording(bool liveMode)
     m_recordedMono.clear();
     m_smoothedLevel = 0.0;
     m_liveSilenceSeconds = 0.0;
+    m_liveHadSpeechSinceFlush = false;
     m_liveMode = liveMode;
     m_recording = true;
 
@@ -306,6 +307,16 @@ void VoiceRecorder::onCaptureReadyRead()
     static constexpr qreal kLiveSilenceCutSeconds = 0.35; // how long a pause has to last before it counts as a boundary
     static constexpr qreal kLiveChunkMinSeconds = 1.5;    // never cut a chunk shorter than this, even at a real pause
     static constexpr qreal kLiveChunkMaxSeconds = 8.0;    // cut here regardless of silence — caps how long a run-on sentence can go untranscribed
+    // If nobody's said anything at all yet (e.g. the button's been held
+    // through a long silent stretch), there's still no point letting
+    // m_recordedMono grow forever — dropped outright once it's this long
+    // with zero speech in it, rather than ever being sent off to
+    // transcribe (see m_liveHadSpeechSinceFlush's own comment) or kept
+    // around indefinitely.
+    static constexpr qreal kLiveSilenceOnlyDiscardSeconds = 16.0;
+
+    if (peak >= kLiveSilenceThreshold)
+        m_liveHadSpeechSinceFlush = true;
 
     const qreal bufferDurationSeconds = double(mono.size()) / double(m_source->format().sampleRate());
     m_liveSilenceSeconds = (peak < kLiveSilenceThreshold) ? (m_liveSilenceSeconds + bufferDurationSeconds) : 0.0;
@@ -314,6 +325,17 @@ void VoiceRecorder::onCaptureReadyRead()
     const bool hitSilenceBoundary = chunkDurationSeconds >= kLiveChunkMinSeconds
         && m_liveSilenceSeconds >= kLiveSilenceCutSeconds;
     const bool hitHardCap = chunkDurationSeconds >= kLiveChunkMaxSeconds;
+
+    // A long silent stretch that never even reaches a boundary condition
+    // (min length + a pause, or the hard cap) still shouldn't let
+    // m_recordedMono grow forever — flushLiveChunk() below already discards
+    // an all-silence chunk once one of those conditions *does* trigger, but
+    // this covers the case where neither ever does.
+    if (!m_liveHadSpeechSinceFlush && chunkDurationSeconds >= kLiveSilenceOnlyDiscardSeconds) {
+        m_recordedMono.clear();
+        m_liveSilenceSeconds = 0.0;
+        return;
+    }
 
     if (hitSilenceBoundary || hitHardCap) {
         const QByteArray wav = flushLiveChunk(m_source->format());
@@ -366,9 +388,19 @@ bool VoiceRecorder::writeWavFile(const QString &path, const QByteArray &pcm16Dat
 QByteArray VoiceRecorder::flushLiveChunk(const QAudioFormat &format)
 {
     m_liveSilenceSeconds = 0.0;
+    const bool hadSpeech = m_liveHadSpeechSinceFlush;
+    m_liveHadSpeechSinceFlush = false;
 
-    if (m_recordedMono.isEmpty())
+    // Covers both "nothing recorded at all" and "recorded something, but it
+    // never actually cleared the silence threshold" — either way there's
+    // nothing worth sending off to transcribe (an all-silence chunk just
+    // comes back as whisper's own "[BLANK_AUDIO]" placeholder text instead
+    // of genuinely empty, which would otherwise show up as junk in the
+    // message box).
+    if (m_recordedMono.isEmpty() || !hadSpeech) {
+        m_recordedMono.clear();
         return QByteArray();
+    }
 
     const QVector<float> resampled = resampleLinear(m_recordedMono, format.sampleRate(), kTargetSampleRate);
     m_recordedMono.clear();

@@ -1903,14 +1903,17 @@ void ChatWidget::onVoicePressed()
     m_voiceButton->style()->polish(m_voiceButton);
 
     // Live mode (transcribing in short chunks *while* still recording,
-    // rather than once at release) is used automatically whenever a
-    // whisper-server binary is available — same "just works once it's set
-    // up" pattern as whisper-cli itself, no separate Settings toggle to
-    // remember to flip. ensureLiveServerRunning() is safe to call every
-    // press: a no-op if already up against the right model, and doesn't
-    // block waiting for readiness — any chunk that arrives before it's
-    // actually ready just gets queued (see WhisperManager::sendNextQueuedChunk()).
-    const bool live = m_whisperManager && m_whisperManager->isServerBinaryAvailable();
+    // rather than once at release) needs both a whisper-server binary
+    // available AND Settings' "Enable live transcription" checkbox on —
+    // off by default even when the binary is there, since it's a real
+    // behavior change from the classic push-to-talk flow, not something to
+    // silently switch on just because a build step happened to succeed.
+    // ensureLiveServerRunning() is safe to call every press either way: a
+    // no-op if already up against the right model, and doesn't block
+    // waiting for readiness — any chunk that arrives before it's actually
+    // ready just gets queued (see WhisperManager::sendNextQueuedChunk()).
+    const bool live = m_whisperManager && m_whisperManager->isServerBinaryAvailable()
+        && QSettings().value("voice/liveTranscriptionEnabled", false).toBool();
     if (live) {
         m_inputEdit->clear();
         m_whisperManager->ensureLiveServerRunning();

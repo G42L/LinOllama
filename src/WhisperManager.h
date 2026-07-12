@@ -170,6 +170,18 @@ private:
     // shared by the live progress signal and the final one so mid-stream
     // text and the final text are formatted identically.
     static QString cleanTranscript(const QByteArray &rawStdout);
+    // Strips whisper.cpp's own bracketed "there was no actual speech here"
+    // placeholder tokens (e.g. "[BLANK_AUDIO]", "[SILENCE]") that the model
+    // itself sometimes emits as literal transcribed text for a segment it
+    // decoded as non-speech, rather than just returning empty — VoiceRecorder's
+    // silence gating (see m_liveHadSpeechSinceFlush) keeps genuinely
+    // all-silence chunks from ever being sent in the first place, but this
+    // is a second, cheap layer of defense for a chunk that had *some* real
+    // speech in it yet still got one of these tokens mixed into the result
+    // (or for whisper-cli's own push-to-talk path, which has no equivalent
+    // client-side gating at all). Applied to both live chunk results and
+    // cleanTranscript()'s whisper-cli output.
+    static QString stripNonSpeechTags(const QString &text);
     // Picks out an actual diagnostic line from whisper-cli's stderr (one
     // containing "error"/"must be"/"failed"/"warning"), ignoring the
     // system_info/timing lines it always prints regardless of outcome —

@@ -167,21 +167,22 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   downmixed to mono, resampled to the exact 16 kHz/16-bit PCM whisper.cpp
   requires, and written to a temp WAV on a RAM-backed `tmpfs` (`/dev/shm`)
   when available — deleted immediately after transcription, win or lose.
-- **Live transcription while still talking**, if a `whisper-server` binary
-  (a second binary from the same whisper.cpp checkout, built from its
-  `examples/server`) is found — Settings → Voice transcription shows
-  whether it was, with a button to point at one manually. When available,
-  it's used automatically: `whisper-server` loads the model once and stays
-  warm, and the recording is sliced into chunks at natural pauses in
-  speech (a short energy-threshold silence detector, not fixed time
-  windows, so words don't get cut mid-syllable at a chunk boundary; capped
-  at 8s so a long run-on sentence still gets transcribed periodically) and
-  streamed to the message box chunk by chunk as you talk, instead of
-  waiting until you release the button. Audio capture always takes
-  priority — a slow/backed-up chunk transcription never blocks or drops
-  captured audio, it just falls behind and catches up. Falls back to the
-  normal (transcribe-once-on-release) behavior above whenever
-  `whisper-server` isn't set up; `whisper-cli` alone reloads its whole
+- **Live transcription while still talking** — off by default, opt in via
+  Settings → Voice transcription → **"Enable live transcription"** (grayed
+  out until a `whisper-server` binary is found; a status line there says
+  whether it was, with a button to point at one manually). When on,
+  `whisper-server` — a second binary from the same whisper.cpp checkout,
+  built from its `examples/server` — loads the model once and stays warm,
+  and the recording is sliced into chunks at natural pauses in speech (a
+  short energy-threshold silence detector, not fixed time windows, so
+  words don't get cut mid-syllable at a chunk boundary; capped at 8s so a
+  long run-on sentence still gets transcribed periodically) and streamed
+  to the message box chunk by chunk as you talk, instead of waiting until
+  you release the button. Audio capture always takes priority — a slow/
+  backed-up chunk transcription never blocks or drops captured audio, it
+  just falls behind and catches up. With the setting off (or no
+  `whisper-server` built), voice transcription works exactly as described
+  above instead — once, on release; `whisper-cli` alone reloads its whole
   model on every invocation, too slow to re-run every few seconds.
 
 ### 🗔 Tray
@@ -250,11 +251,33 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   at least one `ggml-*.bin` model (Settings' model manager can do this part
   for you). Everything else in the app works fine without it; the voice
   button just reports it isn't configured yet.
+  ```bash
+  git clone https://github.com/ggerganov/whisper.cpp ~/whisper.cpp
+  cd ~/whisper.cpp
+  cmake -B build
+  cmake --build build --target whisper-cli -j$(nproc)
+  ```
+  If you do not want to install ccache `sudo apt install ccache`, you can 
+  ignore it by `rm -rf build & cmake -B build -DGGML_CCACHE=OFF & cmake --build build --target whisper-server -j$(nproc)` (rm -rf build is needed here since the existing build/ was already configured with ccache detected — a fresh configure is what picks up -DGGML_CCACHE=OFF.).
 - **Optional, for *live* transcription while still talking**: additionally
-  build the `whisper-server` target from that same checkout
-  (`cmake --build build --target whisper-server` — it's whisper.cpp's own
-  `examples/server`). Without it, voice transcription still works exactly
-  as above, just on release rather than live.
+  build the `whisper-server` target from that same checkout — it's
+  whisper.cpp's own `examples/server`, not a separate download:
+  ```bash
+  cd ~/whisper.cpp
+  cmake --build build --target whisper-server -j$(nproc)
+  ```
+  (Building both targets from scratch: `cmake -B build && cmake --build
+  build --target whisper-cli --target whisper-server -j$(nproc)`.) This
+  drops `whisper-server` right next to `whisper-cli` in
+  `~/whisper.cpp/build/bin/`, which is exactly where the app already looks
+  — restart it (or reopen Settings → Voice transcription) and it should
+  auto-detect it, same as `whisper-cli` itself. **You don't run
+  `whisper-server` yourself** — the app launches and manages that process
+  on its own, on a fixed local port, the first time you press-and-hold the
+  mic button; there's no separate "start the server" step. If it isn't
+  auto-detected, Settings → Voice transcription has a "Live server
+  binary…" button to point at it manually. Without it, voice transcription
+  still works exactly as above, just on release rather than live.
 - Linux — GPU monitoring in particular is Linux-specific (sysfs, NVML via
   `dlopen`), and server control assumes systemd or a plain Unix process.
 
@@ -427,6 +450,20 @@ the system stats strip while holding the record button — if it doesn't move
 at all, the wrong input device is likely selected in Settings' microphone
 picker; if it does move but transcription still fails, the error message
 now surfaces whisper-cli's actual diagnostic line rather than a generic one.
+
+**Live (while-still-talking) transcription never kicks in — it always waits until release.**
+First check the **"Enable live transcription"** checkbox in Settings →
+Voice transcription is actually on — it's off by default even once
+`whisper-server` is built, on purpose (see that setting's own hint text).
+If it's grayed out, check the status line for "Live server
+(whisper-server):" — "not found" means you don't have that binary built
+yet (see Requirements above for the exact `cmake --build` command; it's a
+second target from the same whisper.cpp checkout, not a separate project).
+If the checkbox is on and the binary's found but nothing streams in while
+you talk, hold the mic button and watch for an error bubble —
+`ensureLiveServerRunning()` reports a failure (e.g. the selected model
+isn't downloaded, or the port couldn't be bound) that way rather than
+failing silently.
 
 ## Contributing / project layout
 

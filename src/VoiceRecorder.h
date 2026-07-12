@@ -132,6 +132,18 @@ private:
     // of silence (so a long run-on sentence with no pause still gets
     // flushed periodically instead of never transcribing until release).
     qreal m_liveSilenceSeconds = 0.0;
+    // Whether any buffer since the last flush actually cleared the silence
+    // threshold — a chunk boundary only really flushes (and gets sent off
+    // for transcription at all) if this is true. Without it, a quiet beat
+    // right after the mic button is pressed (before the person has
+    // actually started talking) can by itself already satisfy both the min
+    // length and the silence-cut duration, flushing an all-silence "chunk"
+    // that whisper then transcribes as the literal text "[BLANK_AUDIO]"
+    // instead of just... nothing. Reset in flushLiveChunk(); an all-silence
+    // stretch that gets skipped this way just keeps accumulating (silently
+    // discarding old silent samples isn't needed — see onCaptureReadyRead())
+    // until real speech finally shows up.
+    bool m_liveHadSpeechSinceFlush = false;
 
     // Same ballistics as before: fast rise toward a louder peak, slow decay
     // back down, so the meter has visible inertia instead of jittering with

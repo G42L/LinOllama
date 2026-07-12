@@ -109,6 +109,7 @@ private slots:
     void onChangeWhisperServerBinaryClicked();
     void onWhisperExpandToggleClicked();
     void onVoiceAutoSendToggled(bool enabled);
+    void onLiveTranscriptionToggled(bool enabled);
 
     void onAudioInputComboChanged(int index);
     void refreshAudioInputCombo();
@@ -183,6 +184,15 @@ private:
     WhisperManager *m_whisperManager = nullptr;
     QLabel *m_whisperStatusLabel = nullptr;
     QCheckBox *m_voiceAutoSendCheck = nullptr; // "Send automatically after transcription" — see voiceAutoSendChanged()
+    // "Enable live transcription" — "voice/liveTranscriptionEnabled" in
+    // QSettings, off by default even when whisper-server is installed and
+    // detected. Read fresh by ChatWidget::onVoicePressed() at the moment
+    // the mic button is pressed, same as e.g. useCustomContextLength — no
+    // live-signal round trip needed since it only matters at that one
+    // point, not continuously. Grayed out (see refreshWhisperStatusLabel())
+    // whenever no whisper-server binary is available, since it wouldn't do
+    // anything either way in that case.
+    QCheckBox *m_liveTranscriptionCheck = nullptr;
     QTableWidget *m_whisperModelsTable = nullptr;
     QToolButton *m_whisperExpandButton = nullptr;
     // Minimal (default): Model/Speed/Accuracy/action only, with disk size,
