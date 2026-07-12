@@ -16,6 +16,9 @@
 #include <QRegularExpression>
 #include <QDebug>
 
+#include <sys/prctl.h>
+#include <csignal>
+
 namespace {
 // download-ggml-model.sh's own URL scheme (see upstream whisper.cpp) —
 // resolves through a redirect to the actual CDN, hence NoLessSafeRedirectPolicy below.
@@ -533,6 +536,19 @@ void WhisperManager::ensureLiveServerRunning()
         const QString error = m_serverProcess->errorString();
         stopLiveServer();
         emit liveServerStateChanged(false, error);
+    });
+    // Safety net for the case our own stopLiveServer()/~WhisperManager()
+    // cleanup never gets to run at all — a crash, `kill -9`, or any signal
+    // with no handler installed (this app installs none) skips C++
+    // destructors entirely, which would otherwise leave whisper-server
+    // (and its loaded model) orphaned and running forever. PR_SET_PDEATHSIG
+    // is a kernel-level guarantee, not app-level cleanup: the kernel itself
+    // delivers SIGKILL to this child the moment *this* process dies, for
+    // any reason, without our code needing to run at all. Runs in the
+    // freshly-forked child, before exec() — see QProcess::setChildProcessModifier().
+    // Linux-specific (prctl), same as the rest of this app.
+    m_serverProcess->setChildProcessModifier([]() {
+        prctl(PR_SET_PDEATHSIG, SIGKILL);
     });
     m_serverProcess->start();
 
