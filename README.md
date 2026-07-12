@@ -100,9 +100,11 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   read and appended to your message as context (skipped if they look
   binary); images (`png/jpg/jpeg/gif/bmp/webp`) are base64-encoded and sent
   via Ollama's vision `images` field, for models that support it.
-- **Tool calling**: "Tools" toggles for **Search the web** (Wikipedia —
-  not a general web search engine, see Limitations), **Calculator**
-  (exact arithmetic, `+ - * / % ^` and parentheses), and **Current date &
+- **Tool calling**: "Tools" toggles for **Search Wikipedia** (not a
+  general web search engine, see Limitations), **Search Stack Overflow**
+  (via the public Stack Exchange API — free, keyless, for programming
+  questions/error messages specifically), **Calculator** (exact
+  arithmetic, `+ - * / % ^` and parentheses), and **Current date &
   time**. Unlike a plain toggle that always runs before sending, enabling
   one just makes it available (via Ollama's `tools` API) — the model
   itself decides, per reply, whether to actually call it, and can chain
@@ -296,8 +298,9 @@ See Limitations if you move this checkout elsewhere afterward.
   `~/.config/systemd/user/ollama.service.d/override.conf`.
 - Nothing is sent anywhere except your configured Ollama server, your
   selected microphone → the local whisper.cpp process (never leaves the
-  machine), and — only when the web search tool is enabled *and* the model
-  actually decides to call it — Wikipedia's public API.
+  machine), and — only when a search tool is enabled *and* the model
+  actually decides to call it — Wikipedia's or the Stack Exchange API's
+  public endpoints.
 
 ## ⛔ Known limitations
 

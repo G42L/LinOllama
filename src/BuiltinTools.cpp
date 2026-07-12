@@ -64,6 +64,28 @@ QJsonObject currentDateTimeDefinition()
     return QJsonObject{{"type", "function"}, {"function", function}};
 }
 
+QJsonObject stackOverflowSearchDefinition()
+{
+    QJsonObject params{
+        {"type", "object"},
+        {"properties", QJsonObject{
+            {"query", QJsonObject{
+                {"type", "string"},
+                {"description", "The search query, e.g. \"python reverse a list\" or an exact error message."}
+            }}
+        }},
+        {"required", QJsonArray{"query"}}
+    };
+    QJsonObject function{
+        {"name", kStackOverflowSearch},
+        {"description", "Search Stack Overflow for programming questions and answers — error messages, "
+                         "API usage, \"how do I...\" coding questions. Best for technical/programming "
+                         "topics specifically, not general knowledge (use web_search for that instead)."},
+        {"parameters", params}
+    };
+    return QJsonObject{{"type", "function"}, {"function", function}};
+}
+
 QString currentDateTimeText()
 {
     return QLocale::system().toString(QDateTime::currentDateTime(), "dddd, yyyy-MM-dd HH:mm:ss t");

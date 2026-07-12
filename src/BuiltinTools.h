@@ -16,6 +16,7 @@ namespace BuiltinTools {
 constexpr const char *kWebSearch = "web_search";
 constexpr const char *kCalculate = "calculate";
 constexpr const char *kCurrentDateTime = "get_current_datetime";
+constexpr const char *kStackOverflowSearch = "search_stackoverflow";
 
 // Each returns one entry of the /api/chat "tools" array (the
 // {"type": "function", "function": {...}} wrapper Ollama expects) — see
@@ -24,6 +25,7 @@ constexpr const char *kCurrentDateTime = "get_current_datetime";
 QJsonObject webSearchDefinition();
 QJsonObject calculateDefinition();
 QJsonObject currentDateTimeDefinition();
+QJsonObject stackOverflowSearchDefinition();
 
 // Evaluates a plain arithmetic expression (+, -, *, /, %, ^, parentheses,
 // unary minus, decimal numbers — no variables or functions, since the

@@ -156,6 +156,7 @@ private slots:
     void onWebSearchToggled(bool enabled);
     void onCalculatorToggled(bool enabled);
     void onDateTimeToolToggled(bool enabled);
+    void onStackOverflowToggled(bool enabled);
     void onThinkingToggled(bool enabled);
     void onVoicePressed();
     void onVoiceReleased();
@@ -512,10 +513,12 @@ private:
     QAction *m_webSearchAction = nullptr;
     QAction *m_calculatorAction = nullptr;
     QAction *m_dateTimeAction = nullptr;
+    QAction *m_stackOverflowAction = nullptr;
     QAction *m_thinkingAction = nullptr;
     bool m_webSearchEnabled = false; // off by default, per spec
     bool m_calculatorEnabled = false;
     bool m_dateTimeEnabled = false;
+    bool m_stackOverflowEnabled = false;
     bool m_thinkingEnabled = true;   // matches this app's prior always-on behavior
 
     // Executes whatever built-in tools the model actually decided to call

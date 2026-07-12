@@ -1,6 +1,7 @@
 #include "ToolExecutor.h"
 #include "BuiltinTools.h"
 #include "WebSearchClient.h"
+#include "StackOverflowSearchClient.h"
 
 ToolExecutor::ToolExecutor(QObject *parent) : QObject(parent) {}
 
@@ -37,6 +38,17 @@ void ToolExecutor::executeToolCalls(const QString &conversationId, const QJsonAr
             // matter.
             auto *client = new WebSearchClient(this);
             connect(client, &WebSearchClient::searchCompleted, this,
+                    [this, conversationId, i, name, arguments, client](const QString &, const QString &resultsText) {
+                        client->deleteLater();
+                        completeCall(conversationId, i, name, arguments,
+                                     resultsText.isEmpty() ? QStringLiteral("No results found.") : resultsText);
+                    });
+            client->search(query);
+        } else if (name == BuiltinTools::kStackOverflowSearch) {
+            const QString query = arguments.value("query").toString();
+            // Same one-client-per-call reasoning as web_search above.
+            auto *client = new StackOverflowSearchClient(this);
+            connect(client, &StackOverflowSearchClient::searchCompleted, this,
                     [this, conversationId, i, name, arguments, client](const QString &, const QString &resultsText) {
                         client->deleteLater();
                         completeCall(conversationId, i, name, arguments,

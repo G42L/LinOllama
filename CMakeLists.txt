@@ -21,6 +21,8 @@ add_executable(ollama-tray
     src/ChatQueue.h
     src/WebSearchClient.cpp
     src/WebSearchClient.h
+    src/StackOverflowSearchClient.cpp
+    src/StackOverflowSearchClient.h
     src/VoiceRecorder.cpp
     src/VoiceRecorder.h
     src/WhisperManager.cpp

@@ -196,10 +196,15 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_toolsButton->setPopupMode(QToolButton::InstantPopup);
 
     auto *toolsMenu = new QMenu(m_toolsButton);
-    m_webSearchAction = toolsMenu->addAction("Search the web");
+    m_webSearchAction = toolsMenu->addAction("Search Wikipedia");
     m_webSearchAction->setCheckable(true);
     m_webSearchAction->setChecked(m_webSearchEnabled);
     connect(m_webSearchAction, &QAction::toggled, this, &ChatWidget::onWebSearchToggled);
+
+    m_stackOverflowAction = toolsMenu->addAction("Search Stack Overflow");
+    m_stackOverflowAction->setCheckable(true);
+    m_stackOverflowAction->setChecked(m_stackOverflowEnabled);
+    connect(m_stackOverflowAction, &QAction::toggled, this, &ChatWidget::onStackOverflowToggled);
 
     m_calculatorAction = toolsMenu->addAction("Calculator");
     m_calculatorAction->setCheckable(true);
@@ -232,7 +237,15 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_modelCombo = new QComboBox;
     m_modelCombo->setObjectName("modelCombo");
     m_modelCombo->setMinimumWidth(110);
-    m_modelCombo->setMaximumWidth(220);
+    // AdjustToContents makes the box's own width track whatever model name
+    // is actually selected (long ones like "qwen2.5-coder:32b-instruct-
+    // q4_K_M" no longer get cropped/elided) instead of a fixed box a long
+    // name would overflow — the 320px ceiling just keeps a truly extreme
+    // name from squeezing the keep-alive combo/voice/send buttons off the
+    // toolbar, which the addStretch() to its left otherwise has room to
+    // absorb for anything shorter.
+    m_modelCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_modelCombo->setMaximumWidth(320);
     connect(m_modelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ChatWidget::onModelComboChanged);
     toolLayout->addWidget(m_modelCombo);
@@ -1271,6 +1284,8 @@ QJsonArray ChatWidget::buildToolDefinitions() const
         tools.append(BuiltinTools::calculateDefinition());
     if (m_dateTimeEnabled)
         tools.append(BuiltinTools::currentDateTimeDefinition());
+    if (m_stackOverflowEnabled)
+        tools.append(BuiltinTools::stackOverflowSearchDefinition());
     return tools;
 }
 
@@ -1834,6 +1849,12 @@ void ChatWidget::onDateTimeToolToggled(bool enabled)
     updateToolsButtonAppearance();
 }
 
+void ChatWidget::onStackOverflowToggled(bool enabled)
+{
+    m_stackOverflowEnabled = enabled;
+    updateToolsButtonAppearance();
+}
+
 void ChatWidget::onThinkingToggled(bool enabled)
 {
     m_thinkingEnabled = enabled;
@@ -1844,7 +1865,9 @@ void ChatWidget::updateToolsButtonAppearance()
 {
     QStringList activeParts;
     if (m_webSearchEnabled)
-        activeParts << "Web";
+        activeParts << "Wiki";
+    if (m_stackOverflowEnabled)
+        activeParts << "SO";
     if (m_calculatorEnabled)
         activeParts << "Calc";
     if (m_dateTimeEnabled)
@@ -1960,7 +1983,7 @@ void ChatWidget::reloadThemedIcons()
     // thinking icons' tint, and it's invoked once during construction
     // before m_voiceButton (built later in the constructor) exists yet —
     // guard each widget rather than relying on call order.
-    if (!m_webSearchAction || !m_thinkingAction || !m_voiceButton)
+    if (!m_webSearchAction || !m_stackOverflowAction || !m_thinkingAction || !m_voiceButton)
         return;
 
     const bool dark = m_themeManager && m_themeManager->isDarkActive();
@@ -1971,6 +1994,11 @@ void ChatWidget::reloadThemedIcons()
     // "non-default" summary logic elsewhere.
     m_webSearchAction->setIcon(Theme::loadThemedIcon(
         ":/icons/web-search.svg", dark, 16, m_webSearchEnabled ? "accent" : "secondaryText"));
+    // Same search icon as Wikipedia — both are "look this up online" tools,
+    // just different sources; no separate asset needed to tell them apart
+    // since their labels already do that.
+    m_stackOverflowAction->setIcon(Theme::loadThemedIcon(
+        ":/icons/web-search.svg", dark, 16, m_stackOverflowEnabled ? "accent" : "secondaryText"));
     m_thinkingAction->setIcon(Theme::loadThemedIcon(
         ":/icons/thinking.svg", dark, 16, m_thinkingEnabled ? "accent" : "secondaryText"));
     // The button's own "recording" property, set synchronously in
