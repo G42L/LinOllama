@@ -124,6 +124,11 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   default, in which case Ollama picks its own default. There is **no**
   "unlimited context" mode; every model has a hard ceiling from its own
   metadata that Ollama enforces regardless of what's requested.
+- Optional generation parameters (Settings → Ollama → Generation
+  parameters) — temperature, top_p, top_k, seed, max tokens
+  (`num_predict`), repeat penalty, and stop sequences, all gated by one
+  "Use custom generation parameters" toggle. Off by default, in which case
+  Ollama's own built-in defaults apply exactly as before.
 
 ### 🎙️ Voice transcription
 

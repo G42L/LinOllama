@@ -1095,6 +1095,24 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
         ? QSettings().value("chat/customContextLength", 8192).toInt()
         : 0;
 
+    // Mirrors customNumCtx's own read-fresh-at-send-time approach, but as
+    // one struct instead of one variable per field — see GenerationOptions'
+    // own comment for why every field is always included once the master
+    // toggle is on, rather than each having its own independent on/off.
+    GenerationOptions genOptions;
+    genOptions.enabled = QSettings().value("chat/useCustomGenParams", false).toBool();
+    genOptions.temperature = QSettings().value("chat/temperature", 0.8).toDouble();
+    genOptions.topP = QSettings().value("chat/topP", 0.9).toDouble();
+    genOptions.topK = QSettings().value("chat/topK", 40).toInt();
+    genOptions.seed = QSettings().value("chat/seed", 0).toInt();
+    genOptions.numPredict = QSettings().value("chat/numPredict", -1).toInt();
+    genOptions.repeatPenalty = QSettings().value("chat/repeatPenalty", 1.1).toDouble();
+    const QString stopSetting = QSettings().value("chat/stopSequences").toString();
+    if (!stopSetting.isEmpty()) {
+        for (const QString &s : stopSetting.split(',', Qt::SkipEmptyParts))
+            genOptions.stop << s.trimmed();
+    }
+
     // The conversation's own pinned model (set once, at creation — see
     // ConversationStore::createConversation()) is the authoritative source,
     // not the combo's live UI state: it's already correct immediately after
@@ -1117,6 +1135,7 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
     turn.apiMessages = apiMessages;
     turn.think = m_thinkingEnabled;
     turn.customNumCtx = customNumCtx;
+    turn.genOptions = genOptions;
     m_chatQueue->enqueue(turn);
 }
 

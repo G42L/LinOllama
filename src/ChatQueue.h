@@ -5,6 +5,8 @@
 #include <QJsonArray>
 #include <QVector>
 
+#include "OllamaClient.h" // for GenerationOptions
+
 class OllamaClient;
 
 // Serializes /api/chat turns across every conversation so only one is ever
@@ -41,6 +43,7 @@ public:
         QJsonArray apiMessages;
         bool think = true;
         int customNumCtx = 0;
+        GenerationOptions genOptions;
     };
 
     explicit ChatQueue(OllamaClient *ollamaClient, QObject *parent = nullptr);

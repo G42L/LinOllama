@@ -19,6 +19,7 @@ class QTableWidget;
 class QProgressBar;
 class QToolButton;
 class QLineEdit;
+class QDoubleSpinBox;
 
 // App settings dialog: theme mode, plus an "Offload model" section mirroring
 // the one in the tray menu (same underlying OllamaClient calls) — built as a
@@ -122,6 +123,19 @@ private slots:
     void onOllamaKeepAliveEdited();
     void onOllamaFlashAttentionToggled(bool enabled);
     void onOllamaNumParallelChanged(int value);
+
+    // Persist straight to QSettings ("chat/*") — read fresh at send time by
+    // ChatWidget::streamAssistantReplyForCurrentHistory() (same pattern as
+    // the existing context-length setting), so no live signal out of this
+    // dialog is needed; nothing elsewhere in the UI reflects these values.
+    void onGenParamsToggled(bool enabled);
+    void onTemperatureChanged(double value);
+    void onTopPChanged(double value);
+    void onTopKChanged(int value);
+    void onSeedChanged(int value);
+    void onNumPredictChanged(int value);
+    void onRepeatPenaltyChanged(double value);
+    void onStopSequencesEdited();
 
     void onPullModelClicked();
     void onCancelPullClicked();
@@ -272,4 +286,18 @@ private:
     QLabel *m_installedModelsStatusLabel = nullptr;
     void rebuildInstalledModelsList(const QStringList &modelNames);
     void clearInstalledModelsList();
+
+    // Ollama tab's "Generation parameters" group — see GenerationOptions
+    // (OllamaClient.h) for how these map onto the actual /api/chat request,
+    // and the onGenParamsToggled()/etc. slots for persistence. All six
+    // numeric fields plus stop sequences are gated by one master checkbox
+    // rather than each having its own independent enable/disable.
+    QCheckBox *m_useCustomGenParamsCheck = nullptr;
+    QDoubleSpinBox *m_temperatureSpin = nullptr;
+    QDoubleSpinBox *m_topPSpin = nullptr;
+    QSpinBox *m_topKSpin = nullptr;
+    QSpinBox *m_seedSpin = nullptr;
+    QSpinBox *m_numPredictSpin = nullptr;
+    QDoubleSpinBox *m_repeatPenaltySpin = nullptr;
+    QLineEdit *m_stopSequencesEdit = nullptr;
 };

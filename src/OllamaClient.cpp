@@ -52,7 +52,8 @@ struct OllamaClient::ChatStream
 };
 
 void OllamaClient::sendChatMessage(const QString &conversationId, const QString &model,
-                                    const QJsonArray &messages, bool think, int customNumCtx)
+                                    const QJsonArray &messages, bool think, int customNumCtx,
+                                    const GenerationOptions &genOptions)
 {
     abortChat(conversationId); // replace this conversation's own previous stream, if any — others are untouched
 
@@ -70,8 +71,22 @@ void OllamaClient::sendChatMessage(const QString &conversationId, const QString 
     // Ollama's docs); on models that do support it, this is what makes
     // message.thinking show up in the stream at all.
     body["think"] = think;
+
+    QJsonObject options;
     if (customNumCtx > 0)
-        body["options"] = QJsonObject{{"num_ctx", customNumCtx}};
+        options["num_ctx"] = customNumCtx;
+    if (genOptions.enabled) {
+        options["temperature"] = genOptions.temperature;
+        options["top_p"] = genOptions.topP;
+        options["top_k"] = genOptions.topK;
+        options["seed"] = genOptions.seed;
+        options["num_predict"] = genOptions.numPredict;
+        options["repeat_penalty"] = genOptions.repeatPenalty;
+        if (!genOptions.stop.isEmpty())
+            options["stop"] = QJsonArray::fromStringList(genOptions.stop);
+    }
+    if (!options.isEmpty())
+        body["options"] = options;
 
     auto *stream = new ChatStream;
     stream->reply = m_manager.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));

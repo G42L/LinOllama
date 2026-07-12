@@ -106,7 +106,7 @@ void ChatQueue::onModelUnloaded(const QString &model, bool success)
     m_runningConversationId = turn.conversationId;
     m_loadedModel = turn.model;
     emit turnStarted(turn.conversationId);
-    m_ollamaClient->sendChatMessage(turn.conversationId, turn.model, turn.apiMessages, turn.think, turn.customNumCtx);
+    m_ollamaClient->sendChatMessage(turn.conversationId, turn.model, turn.apiMessages, turn.think, turn.customNumCtx, turn.genOptions);
     broadcastQueuePositions();
 }
 
@@ -149,7 +149,7 @@ void ChatQueue::startNext()
     m_runningConversationId = turn.conversationId;
     m_loadedModel = turn.model;
     emit turnStarted(turn.conversationId);
-    m_ollamaClient->sendChatMessage(turn.conversationId, turn.model, turn.apiMessages, turn.think, turn.customNumCtx);
+    m_ollamaClient->sendChatMessage(turn.conversationId, turn.model, turn.apiMessages, turn.think, turn.customNumCtx, turn.genOptions);
 }
 
 void ChatQueue::broadcastQueuePositions()

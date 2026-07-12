@@ -15,6 +15,27 @@ struct LoadedModelInfo
     quint64 sizeVramBytes = 0;
 };
 
+// The sampling/generation knobs beyond num_ctx (which predates this struct
+// and keeps its own separate parameter — see sendChatMessage() — since it
+// already had its own independent Settings toggle before these existed).
+// `enabled` is Settings' single "Use custom generation parameters" master
+// toggle (see SettingsDialog's Ollama tab): when false, none of this is
+// sent and Ollama's own built-in defaults apply exactly as if this struct
+// didn't exist. When true, every field is sent every time — each one is
+// pre-filled with Ollama's own documented default in the UI, so leaving a
+// field untouched sends a value that behaves identically to omitting it.
+struct GenerationOptions
+{
+    bool enabled = false;
+    double temperature = 0.8;
+    double topP = 0.9;
+    int topK = 40;
+    int seed = 0;        // Ollama's own convention: 0 = random each time
+    int numPredict = -1; // Ollama's own convention: -1 = no limit
+    double repeatPenalty = 1.1;
+    QStringList stop;
+};
+
 // Thin wrapper around Ollama's local REST API.
 class OllamaClient : public QObject
 {
@@ -56,8 +77,16 @@ public:
     // context ceiling, and 0 just means "let Ollama pick its own default."
     // Omitting the field reproduces exactly that same "let Ollama decide"
     // behavior, so this is a real choice, not a workaround.
+    //
+    // genOptions covers the rest of options (temperature, top_p, top_k,
+    // seed, num_predict, repeat_penalty, stop) — see GenerationOptions'
+    // own comment for why it's its own struct rather than more positional
+    // parameters here, and why it's all-or-nothing via its `enabled` flag
+    // rather than each field having its own independent on/off like
+    // customNumCtx does.
     void sendChatMessage(const QString &conversationId, const QString &model, const QJsonArray &messages,
-                          bool think = true, int customNumCtx = 0);
+                          bool think = true, int customNumCtx = 0,
+                          const GenerationOptions &genOptions = GenerationOptions());
 
     // Aborts the in-flight chat stream for the given conversationId, if any.
     // Safe to call when none is active; doesn't touch any other

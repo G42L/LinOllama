@@ -15,6 +15,7 @@
 #include <QCheckBox>
 #include <QSlider>
 #include <QSpinBox>
+#include <QDoubleSpinBox>
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QProgressBar>
@@ -28,6 +29,7 @@
 #include <QAudioDevice>
 #include <QSignalBlocker>
 #include <QTabWidget>
+#include <QScrollArea>
 #include <QLineEdit>
 #include <QPixmap>
 #include <QIcon>
@@ -112,7 +114,20 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     tabs->addTab(appearancePage, "Appearance");
     tabs->addTab(inputsPage, "Inputs");
-    tabs->addTab(ollamaPage, "Ollama");
+    // Ollama has grown into the tallest tab by far (model management,
+    // generation parameters, server environment, pull/delete) — a
+    // QScrollArea rather than sub-tabs keeps every section visible in one
+    // place (still searchable-by-eye top to bottom) instead of hiding half
+    // of it behind another layer of navigation.
+    auto *ollamaScrollArea = new QScrollArea;
+    ollamaScrollArea->setWidget(ollamaPage);
+    ollamaScrollArea->setWidgetResizable(true);
+    ollamaScrollArea->setFrameShape(QFrame::NoFrame);
+    // Scrolling itself (wheel, drag) still works — this only hides the
+    // bar's own track/handle, matching the same sleek look already used
+    // for the main chat message list (see ChatWidget's m_scrollArea).
+    ollamaScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    tabs->addTab(ollamaScrollArea, "Ollama");
     tabs->addTab(whisperPage, "Whisper");
 
     // --- Appearance tab ----------------------------------------------------
@@ -332,6 +347,97 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     modelLayout->addWidget(modelOptimizationHint);
 
     ollamaPageLayout->addWidget(modelGroup);
+
+    // --- Ollama tab: generation parameters ----------------------------------
+    auto *genParamsGroup = new QGroupBox("Generation parameters");
+    auto *genParamsLayout = new QVBoxLayout(genParamsGroup);
+
+    m_useCustomGenParamsCheck = new QCheckBox("Use custom generation parameters");
+    const bool useCustomGenParams = QSettings().value("chat/useCustomGenParams", false).toBool();
+    m_useCustomGenParamsCheck->setChecked(useCustomGenParams);
+    connect(m_useCustomGenParamsCheck, &QCheckBox::toggled, this, &SettingsDialog::onGenParamsToggled);
+    genParamsLayout->addWidget(m_useCustomGenParamsCheck);
+
+    auto *genParamsHint = new QLabel(
+        "Unchecked, Ollama uses its own built-in defaults (shown below) exactly as if none of this "
+        "existed. The fields below are pre-filled with those same defaults, so checking this and "
+        "leaving everything untouched changes nothing — only fields you actually edit affect anything.");
+    genParamsHint->setWordWrap(true);
+    genParamsHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    genParamsLayout->addWidget(genParamsHint);
+
+    auto *genParamsForm = new QFormLayout;
+
+    m_temperatureSpin = new QDoubleSpinBox;
+    m_temperatureSpin->setRange(0.0, 2.0);
+    m_temperatureSpin->setSingleStep(0.05);
+    m_temperatureSpin->setDecimals(2);
+    m_temperatureSpin->setValue(QSettings().value("chat/temperature", 0.8).toDouble());
+    connect(m_temperatureSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &SettingsDialog::onTemperatureChanged);
+    genParamsForm->addRow("Temperature", m_temperatureSpin);
+
+    m_topPSpin = new QDoubleSpinBox;
+    m_topPSpin->setRange(0.0, 1.0);
+    m_topPSpin->setSingleStep(0.05);
+    m_topPSpin->setDecimals(2);
+    m_topPSpin->setValue(QSettings().value("chat/topP", 0.9).toDouble());
+    connect(m_topPSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &SettingsDialog::onTopPChanged);
+    genParamsForm->addRow("Top P", m_topPSpin);
+
+    m_topKSpin = new QSpinBox;
+    m_topKSpin->setRange(0, 200);
+    m_topKSpin->setValue(QSettings().value("chat/topK", 40).toInt());
+    connect(m_topKSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &SettingsDialog::onTopKChanged);
+    genParamsForm->addRow("Top K", m_topKSpin);
+
+    m_seedSpin = new QSpinBox;
+    m_seedSpin->setRange(0, 2147483647);
+    m_seedSpin->setSpecialValueText("Random"); // at 0, the minimum — see GenerationOptions' own comment on the convention
+    m_seedSpin->setValue(QSettings().value("chat/seed", 0).toInt());
+    connect(m_seedSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &SettingsDialog::onSeedChanged);
+    genParamsForm->addRow("Seed", m_seedSpin);
+
+    m_numPredictSpin = new QSpinBox;
+    m_numPredictSpin->setRange(-1, 128000);
+    m_numPredictSpin->setSpecialValueText("No limit"); // at -1, the minimum
+    m_numPredictSpin->setSuffix(" tokens");
+    m_numPredictSpin->setValue(QSettings().value("chat/numPredict", -1).toInt());
+    connect(m_numPredictSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &SettingsDialog::onNumPredictChanged);
+    genParamsForm->addRow("Max tokens", m_numPredictSpin);
+
+    m_repeatPenaltySpin = new QDoubleSpinBox;
+    m_repeatPenaltySpin->setRange(0.0, 2.0);
+    m_repeatPenaltySpin->setSingleStep(0.05);
+    m_repeatPenaltySpin->setDecimals(2);
+    m_repeatPenaltySpin->setValue(QSettings().value("chat/repeatPenalty", 1.1).toDouble());
+    connect(m_repeatPenaltySpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &SettingsDialog::onRepeatPenaltyChanged);
+    genParamsForm->addRow("Repeat penalty", m_repeatPenaltySpin);
+
+    m_stopSequencesEdit = new QLineEdit(QSettings().value("chat/stopSequences").toString());
+    m_stopSequencesEdit->setPlaceholderText("Comma-separated, e.g. ###, </s>");
+    connect(m_stopSequencesEdit, &QLineEdit::editingFinished, this, &SettingsDialog::onStopSequencesEdited);
+    genParamsForm->addRow("Stop sequences", m_stopSequencesEdit);
+
+    genParamsLayout->addLayout(genParamsForm);
+
+    const auto setGenParamsRowEnabled = [this]() {
+        const bool enabled = m_useCustomGenParamsCheck->isChecked();
+        m_temperatureSpin->setEnabled(enabled);
+        m_topPSpin->setEnabled(enabled);
+        m_topKSpin->setEnabled(enabled);
+        m_seedSpin->setEnabled(enabled);
+        m_numPredictSpin->setEnabled(enabled);
+        m_repeatPenaltySpin->setEnabled(enabled);
+        m_stopSequencesEdit->setEnabled(enabled);
+    };
+    setGenParamsRowEnabled();
+    connect(m_useCustomGenParamsCheck, &QCheckBox::toggled, this, [setGenParamsRowEnabled]() { setGenParamsRowEnabled(); });
+
+    ollamaPageLayout->addWidget(genParamsGroup);
 
     // --- Ollama tab: server environment -------------------------------------
     auto *envGroup = new QGroupBox("Server environment");
@@ -1377,4 +1483,44 @@ void SettingsDialog::rebuildInstalledModelsList(const QStringList &modelNames)
 
         m_installedModelsLayout->addWidget(row);
     }
+}
+
+void SettingsDialog::onGenParamsToggled(bool enabled)
+{
+    QSettings().setValue("chat/useCustomGenParams", enabled);
+}
+
+void SettingsDialog::onTemperatureChanged(double value)
+{
+    QSettings().setValue("chat/temperature", value);
+}
+
+void SettingsDialog::onTopPChanged(double value)
+{
+    QSettings().setValue("chat/topP", value);
+}
+
+void SettingsDialog::onTopKChanged(int value)
+{
+    QSettings().setValue("chat/topK", value);
+}
+
+void SettingsDialog::onSeedChanged(int value)
+{
+    QSettings().setValue("chat/seed", value);
+}
+
+void SettingsDialog::onNumPredictChanged(int value)
+{
+    QSettings().setValue("chat/numPredict", value);
+}
+
+void SettingsDialog::onRepeatPenaltyChanged(double value)
+{
+    QSettings().setValue("chat/repeatPenalty", value);
+}
+
+void SettingsDialog::onStopSequencesEdited()
+{
+    QSettings().setValue("chat/stopSequences", m_stopSequencesEdit->text().trimmed());
 }
