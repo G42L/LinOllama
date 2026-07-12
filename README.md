@@ -1,23 +1,69 @@
-# LinOllama GUI
+<p align="center">
+  <img src="src/icons/ollama-app-icon.svg" width="128">
+</p>
 
-A native Qt6/C++ Linux desktop app for chatting with local [Ollama](https://ollama.com)
-models, with a system tray presence for controlling the Ollama server and
-keeping an eye on CPU/RAM/GPU load. Not a web UI — a real tray-resident
-desktop client, in the spirit of Claude Desktop's look and feel.
+<h1 align="center">LinOllama</h1>
 
-## GUI
+<p align="center">
+A beautiful native Linux desktop client for Ollama.
+</p>
+
+<p align="center">
+
+![License](https://img.shields.io/github/license/glegigan/LinOllama)
+![Stars](https://img.shields.io/github/stars/glegigan/LinOllama)
+![Release](https://img.shields.io/github/v/release/glegigan/LinOllama)
+![Qt6](https://img.shields.io/badge/Qt-6-green)
+![Linux](https://img.shields.io/badge/Linux-supported-blue)
+
+</p>
+
+LinOllama is a native Linux desktop client for [Ollama](https://ollama.com) built with modern C++ and Qt6.
+
+Unlike browser-based interfaces, LinOllama feels like a first-class desktop application with a system tray, conversation management, local voice transcription, hardware monitoring, and deep Linux integration in the spirit of Claude Desktop's look and feel.
+
+
+## Why LinOllama?
+
+Unlike web-based clients, LinOllama is designed to feel like a true desktop application.
+
+- Native Qt6 interface
+- Lightweight
+- No Electron
+- No browser
+- Local-first
+- Deep Linux integration
+- Built for power users
+
+## ✨ Showcase
+
+### Overview
 
 | Light Theme | Dark Theme |
 |------------|------------|
 | ![Light Theme](doc/images/light-theme.png) | ![Dark Theme](doc/images/dark-theme.png) |using the dark theme. |
 
+### Conversation
+
 | Chat view colapsed | Chat view expanded |
 |--------------------|--------------------|
 | ![chat view](doc/images/chat-view.png) | ![chat view expanded](doc/images/chat-view-full.png) |
 
-## Features
+## 🚀 Features
 
-### Chat
+> Everything run locally. Not data sent online (except if specifically requeted). **Max privacy, full control!**
+
+- 🎙 Local Whisper.cpp speech-to-text
+- 🖥 Native Qt6/C++ implementation (no Electron)
+- 📊 Real-time CPU/RAM/GPU monitoring
+- 🎤 Mic monitoring when in use
+- 🔄 Conversation queue management
+- 🎨 Dynamic theming
+- 📎 File and image attachments
+- 📌 Embedded maps and HTML rendering
+- 🔧 Deep integration with the Ollama server and Linux desktop
+
+### 💬 Chat
 
 - **Multiple conversations**, listed in a resizable sidebar (create via "+
   New conversation" or just start typing on the empty-state screen); delete
@@ -79,7 +125,7 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   "unlimited context" mode; every model has a hard ceiling from its own
   metadata that Ollama enforces regardless of what's requested.
 
-### Voice transcription
+### 🎙️ Voice transcription
 
 - Local speech-to-text via [whisper.cpp](https://github.com/ggerganov/whisper.cpp)'s
   `whisper-cli` binary, shelled out to per recording — no cloud service, no
@@ -107,7 +153,7 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   requires, and written to a temp WAV on a RAM-backed `tmpfs` (`/dev/shm`)
   when available — deleted immediately after transcription, win or lose.
 
-### Tray
+### 🗔 Tray
 
 - Tray icon (left-click opens the main window; right-click for the menu)
   with: live status, Start/Stop server, an "Offload model" submenu (frees a
@@ -126,7 +172,7 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   starts, they're just set directly in its environment. A systemd
   **system** service isn't modified (see Limitations).
 
-### System monitoring
+### 📊 System monitoring
 
 - CPU (`/proc/stat`) and RAM (`/proc/meminfo`) need no extra dependencies.
 - GPU: enumerates every `/sys/class/drm/cardN` device and identifies each
@@ -139,7 +185,7 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   - **Intel**: utilization only, best-effort (varies by driver); VRAM is
     reported as unavailable since it's shared with system RAM.
 
-### Appearance
+### 🎡 Appearance
 
 - Light / Dark / Auto theme (Auto follows the OS live on Qt 6.5+).
 - Customizable accent color, applied app-wide, plus independent colors for
@@ -150,7 +196,7 @@ desktop client, in the spirit of Claude Desktop's look and feel.
   active theme — black on light, light-on-dark — rather than a fixed color.
 - Some icons are originaly from [System UI Line icon pack](https://www.svgrepo.com/collection/system-ui-line-icons)
 
-## Requirements
+## 🗎 Requirements
 
 - **Ollama itself, installed separately and reachable at
   `http://127.0.0.1:11434`** — this app is a client, it doesn't bundle or
@@ -170,7 +216,7 @@ desktop client, in the spirit of Claude Desktop's look and feel.
 - Linux — GPU monitoring in particular is Linux-specific (sysfs, NVML via
   `dlopen`), and server control assumes systemd or a plain Unix process.
 
-## Dependencies
+## 🖺 Dependencies
 
 Qt6, plus a handful of its modules:
 
@@ -189,7 +235,7 @@ sudo apt install build-essential cmake \
 No NVIDIA/AMD vendor SDK is needed at build time — GPU support is resolved
 entirely at runtime.
 
-## Build & run
+## 🏗️ Build & run
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -216,7 +262,7 @@ update-desktop-database ~/.local/share/applications  # optional, most DEs pick i
 
 See Limitations if you move this checkout elsewhere afterward.
 
-## Data & configuration
+## 🗂️ Data & configuration
 
 - **Conversations**: one JSON file per conversation, at
   `~/.local/share/ollama-tray/conversations/<uuid>.json`. Deleting one
@@ -234,7 +280,7 @@ See Limitations if you move this checkout elsewhere afterward.
   machine), and — only when you explicitly enable the web search tool for a
   message — Wikipedia's public API.
 
-## Known limitations
+## ⛔ Known limitations
 
 - **No in-app whisper.cpp build/install automation.** The app auto-detects
   an existing `whisper-cli` binary and can download *models*, but you still
@@ -271,7 +317,7 @@ See Limitations if you move this checkout elsewhere afterward.
   so it'll break if this directory is moved and needs re-generating/editing
   by hand for a packaged install.
 
-## Troubleshooting
+## 🔍 Troubleshooting
 
 **"No system tray detected" on startup.**
 GNOME doesn't support tray icons without an extension — install and enable
@@ -350,7 +396,7 @@ Single Qt6 Widgets application, no QML. Key files:
 No automated test suite exists yet; changes have generally been verified by
 building, running, and exercising the relevant feature manually.
 
-# License
+# 📄 License
 
 LinOllama is free software licensed under the GNU General Public License v3.0 (GPL-3.0-only).
 
