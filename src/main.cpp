@@ -3,6 +3,8 @@
 #include <QMessageBox>
 #include <QTimer>
 #include <QIcon>
+#include <QWebEnginePage>
+#include <QWebEngineProfile>
 
 #include "TrayApplication.h"
 #include "MainWindow.h"
@@ -36,6 +38,40 @@ int main(int argc, char *argv[])
     qputenv("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu");
 
     QApplication app(argc, argv);
+
+    // Pre-warms QtWebEngine's Chromium subprocess right at launch rather
+    // than letting it happen lazily on whatever MapEmbedWidget/
+    // HtmlEmbedWidget gets constructed first. The very first QWebEnginePage
+    // in a process spins up a whole separate Chromium subprocess (plus,
+    // apparently on this Wayland/EGL setup, some GPU/compositor
+    // initialization even with GPU disabled — see QTWEBENGINE_CHROMIUM_FLAGS
+    // above), and doing that for the first time deep inside a mouse click's
+    // own event handling (selecting a chat that turned out to contain a
+    // ```html reply) was observed to visibly disrupt the whole window (a
+    // brief flicker) and corrupt Qt's own mouse press/release tracking on
+    // the sidebar, leaving it stuck auto-scrolling on mouse *move* until
+    // another click reset it.
+    //
+    // Deliberately a bare QWebEnginePage, NOT a QWebEngineView — the actual
+    // Chromium subprocess/renderer spin-up lives in QWebEnginePage; the
+    // view is just the QWidget that displays its output. An earlier version
+    // of this used a QWebEngineView moved off-screen via move(-10000,-10000),
+    // which still creates a real, mapped top-level native window — Wayland
+    // (unlike X11) doesn't let a client position its own window at all, so
+    // that "off-screen" window could land anywhere the compositor chose,
+    // which is what was actually causing a visible flicker/relocation of
+    // the whole app on launch. A page with no view attached never creates
+    // any native window in the first place, sidestepping that entirely.
+    {
+        auto *warmupProfile = new QWebEngineProfile(); // off-the-record; separate from HtmlEmbedWidget's own shared one, but the Chromium subprocess/GPU init this is actually paying for is shared process-wide either way
+        auto *warmupPage = new QWebEnginePage(warmupProfile);
+        QObject::connect(warmupPage, &QWebEnginePage::loadFinished, warmupPage,
+                          [warmupPage, warmupProfile](bool) {
+            warmupPage->deleteLater();
+            warmupProfile->deleteLater();
+        });
+        warmupPage->setHtml(QStringLiteral("<html></html>"));
+    }
 
     // Needed before any QSettings use (ThemeManager persists the theme
     // choice there) — otherwise Qt falls back to per-call defaults instead

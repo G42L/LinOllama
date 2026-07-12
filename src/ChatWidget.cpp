@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QTimer>
+#include <QPointer>
 #include <QStyle>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -829,9 +830,35 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
     QVector<QWidget *> htmlWidgets;
     htmlWidgets.reserve(htmlBlocks.size());
     for (const QString &html : htmlBlocks) {
-        auto *embed = new HtmlEmbedWidget(html);
-        bubbleLayout->addWidget(embed);
-        htmlWidgets.append(embed);
+        // A thin, empty placeholder goes in immediately so bubbleLayout's
+        // ordering and htmlWidgets (used by the raw/rendered toggle below)
+        // are correct right away; the real HtmlEmbedWidget is only actually
+        // constructed a moment later, off this call stack entirely — see
+        // the comment on the singleShot below for why.
+        auto *placeholder = new QWidget;
+        auto *placeholderLayout = new QVBoxLayout(placeholder);
+        placeholderLayout->setContentsMargins(0, 0, 0, 0);
+        bubbleLayout->addWidget(placeholder);
+        htmlWidgets.append(placeholder);
+
+        // The very first QWebEngineView constructed in this process spins
+        // up Chromium's own subprocess synchronously, which is heavy enough
+        // that doing it inside the same call stack as the click that
+        // selected this conversation (renderConversation() -> ... ->
+        // here) was observed to desync Qt's own mouse press/release
+        // pairing on the sidebar — its list view was left thinking a
+        // press-drag was still in progress, so the next mouse *move* (no
+        // button even held) scrolled it, until a second click somewhere
+        // reset that state. Deferring construction to the next event-loop
+        // turn keeps the (one-time, first-ever) Chromium startup cost
+        // outside the mouse event's own call stack entirely.
+        QPointer<QWidget> placeholderGuard(placeholder);
+        QTimer::singleShot(0, this, [placeholderGuard, html]() {
+            if (!placeholderGuard)
+                return; // the bubble (e.g. its whole conversation) was torn down before this ran
+            auto *embed = new HtmlEmbedWidget(html);
+            placeholderGuard->layout()->addWidget(embed);
+        });
     }
 
     for (const MapBlockSpec &spec : mapBlocks)

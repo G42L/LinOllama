@@ -12,6 +12,7 @@
 #include <QFrame>
 #include <QMessageBox>
 #include <QWidgetAction>
+#include <QWebEngineView>
 
 MainWindow::MainWindow(SystemMonitor *systemMonitor,
                         OllamaClient *ollamaClient,
@@ -139,6 +140,30 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
 
     m_store->loadAll();
     refreshSidebar();
+
+    // Second half of the QtWebEngine pre-warm started in main.cpp. That one
+    // uses a bare QWebEnginePage (no view) to pay for Chromium's subprocess
+    // spin-up early; this one specifically covers the *on-screen*
+    // QWebEngineView path — GL/surface sharing with this window via
+    // Qt::AA_ShareOpenGLContexts — which a headless page alone doesn't
+    // exercise, and which was still the likely cause of a first-HTML-render
+    // flicker/glitch even after the page-only warmup. A child of this
+    // window (not a separate top-level widget, unlike an earlier attempt at
+    // this) so it shares this window's own surface instead of needing its
+    // own — Wayland doesn't let a client position a *top-level* window at
+    // all, which is what made that attempt visibly relocate the whole app;
+    // a plain child widget has no such restriction. Runs here, before this
+    // window is ever shown (main() calls show() only after this constructor
+    // returns), so there's nothing on screen yet for it to visibly disrupt.
+    {
+        auto *warmupView = new QWebEngineView(this);
+        warmupView->setGeometry(0, 0, 1, 1);
+        warmupView->hide();
+        connect(warmupView, &QWebEngineView::loadFinished, warmupView, [warmupView](bool) {
+            warmupView->deleteLater();
+        });
+        warmupView->setHtml(QStringLiteral("<html></html>"));
+    }
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)

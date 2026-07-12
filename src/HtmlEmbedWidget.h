@@ -3,6 +3,7 @@
 #include <QWidget>
 
 class QWebEngineView;
+class QWebChannel;
 
 // Embeds a real Chromium view for a ```html fenced block in an assistant
 // reply, for the cases AutoHeightTextBrowser's QTextBrowser-based rendering
@@ -30,6 +31,22 @@ public:
     explicit HtmlEmbedWidget(const QString &html, QWidget *parent = nullptr);
 
 private slots:
+    // Connected to a minimal ScrollBridge (see HtmlEmbedWidget.cpp) that's
+    // what's actually registered with QWebChannel and exposed to the loaded
+    // page's JS as `qtBridge` — that JS (injected in the constructor) calls
+    // it exactly when the page's content is already scrolled all the way in
+    // the wheel direction under the cursor (the document itself, or a
+    // nested `overflow: auto` container — e.g. an internal scrollbar the
+    // page needed because its real content is taller than this widget's own
+    // height cap, see updateHeightFromContent()). Without this, a wheel
+    // scroll over such content just gets consumed by Chromium's own
+    // scrolling forever, with no way to "scroll past" it into the
+    // surrounding chat — QWebEngineView doesn't chain unhandled wheel input
+    // back out to its Qt parent the way a normal widget would. Walks up to
+    // the nearest ancestor QScrollArea (the chat message list) and scrolls
+    // that directly.
+    void handleParentScrollRequest(int deltaY);
+
     void onLoadFinished(bool ok);
     // Queries the loaded document's actual content height via JS and
     // resizes the view to fit it — a web page has no Qt-native "size hint,"
@@ -39,4 +56,5 @@ private slots:
 
 private:
     QWebEngineView *m_webView = nullptr;
+    QWebChannel *m_channel = nullptr; // owned by the page; see the constructor
 };

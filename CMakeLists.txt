@@ -7,7 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia Svg WebEngineWidgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia Svg WebEngineWidgets WebChannel)
 
 add_executable(ollama-tray
     src/main.cpp
@@ -65,6 +65,7 @@ target_link_libraries(ollama-tray
         Qt6::Multimedia
         Qt6::Svg
         Qt6::WebEngineWidgets
+        Qt6::WebChannel
         ${CMAKE_DL_LIBS}
 )
 
