@@ -349,3 +349,13 @@ Single Qt6 Widgets application, no QML. Key files:
 
 No automated test suite exists yet; changes have generally been verified by
 building, running, and exercising the relevant feature manually.
+
+# License
+
+LinOllama is free software licensed under the GNU General Public License v3.0 (GPL-3.0-only).
+
+You are free to use, study, modify, and redistribute this software under the terms of the GNU GPL version 3.
+
+Any distributed modified version or derivative work of LinOllama must also be licensed under GPLv3 and the corresponding source code must be made available.
+
+See the LICENSE file for the complete license text.
