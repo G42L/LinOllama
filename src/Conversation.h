@@ -6,6 +6,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
+#include "OllamaClient.h" // for kKeepAliveUseServerDefault
+
 // A single turn in a conversation. role is "user", "assistant", or "system"
 // to match Ollama's /api/chat message schema directly — no translation
 // layer needed between what's stored and what's sent to the API.
@@ -72,6 +74,15 @@ struct Conversation
     QDateTime createdAt;
     QVector<ChatMessage> messages;
 
+    // How long Ollama keeps this conversation's model loaded after a reply
+    // — the lighter-weight, per-conversation sibling of the tray/Settings
+    // "offload model" button (which force-unloads whatever's loaded *right
+    // now*). See OllamaClient::sendChatMessage()'s own comment for the
+    // sentinel/-1/0/seconds meaning. Unlike model, this can be changed at
+    // any point in the conversation's life, not just before its first
+    // message — see ConversationStore::setConversationKeepAlive().
+    int keepAliveSeconds = kKeepAliveUseServerDefault;
+
     QJsonObject toJson() const
     {
         QJsonArray msgArray;
@@ -83,7 +94,8 @@ struct Conversation
             {"title", title},
             {"model", model},
             {"createdAt", createdAt.toString(Qt::ISODate)},
-            {"messages", msgArray}
+            {"messages", msgArray},
+            {"keepAliveSeconds", keepAliveSeconds}
         };
     }
 
@@ -96,6 +108,12 @@ struct Conversation
         c.createdAt = QDateTime::fromString(obj.value("createdAt").toString(), Qt::ISODate);
         for (const QJsonValue &v : obj.value("messages").toArray())
             c.messages.append(ChatMessage::fromJson(v.toObject()));
+        // Missing key (conversations saved before this field existed) falls
+        // back to the same sentinel as a freshly-created Conversation would
+        // default to, not some arbitrary JSON default.
+        c.keepAliveSeconds = obj.contains("keepAliveSeconds")
+            ? obj.value("keepAliveSeconds").toInt()
+            : kKeepAliveUseServerDefault;
         return c;
     }
 };

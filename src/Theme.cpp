@@ -564,7 +564,7 @@ QPushButton#editSaveButton:hover {
 /* Matches #toolsButton right next to it — same flat/transparent idle look,
    font size, padding, border-radius, and hover treatment, rather than the
    generic bordered-box QComboBox styling above. */
-#modelCombo {
+#modelCombo, #keepAliveCombo {
     background-color: transparent;
     border: none;
     border-radius: 8px;
@@ -573,7 +573,7 @@ QPushButton#editSaveButton:hover {
     padding: 4px 18px 4px 10px;
 }
 
-#modelCombo:hover {
+#modelCombo:hover, #keepAliveCombo:hover {
     background-color: {{menuButtonHoverBg}};
     color: {{text}};
 }

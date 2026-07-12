@@ -6,6 +6,16 @@
 #include <QJsonArray>
 #include <QVector>
 #include <QHash>
+#include <climits>
+
+// Sentinel for sendChatMessage()'s keepAliveSeconds parameter meaning "don't
+// send keep_alive at all" — Ollama then applies its own server-side default
+// (5 minutes) exactly as if this parameter didn't exist. Chosen instead of
+// e.g. 0 because 0 is itself a meaningful, real keep_alive value ("unload
+// immediately after this reply"), same reasoning as customNumCtx's 0 vs.
+// "unlimited" distinction in sendChatMessage()'s own comment below — except
+// keep_alive has no unused value to repurpose, hence a dedicated sentinel.
+constexpr int kKeepAliveUseServerDefault = INT_MIN;
 
 // A model currently loaded in Ollama's memory (from GET /api/ps), used to
 // populate the "Offload model" list in the tray menu and Settings dialog.
@@ -103,9 +113,22 @@ public:
     // parameters here, and why it's all-or-nothing via its `enabled` flag
     // rather than each field having its own independent on/off like
     // customNumCtx does.
+    //
+    // keepAliveSeconds is sent as the request's top-level "keep_alive"
+    // field (NOT inside options — unlike everything above, this isn't a
+    // model-sampling knob, it's how long Ollama keeps the model loaded in
+    // memory after this reply). kKeepAliveUseServerDefault (the default)
+    // omits the field, same "let Ollama decide" reasoning as customNumCtx's
+    // 0 — Ollama's own default is 5 minutes. -1 means "keep loaded
+    // indefinitely"; 0 means "unload immediately"; a positive value is
+    // seconds. This is the lighter-weight sibling of unloadModel(): that
+    // forces an *existing* loaded model out right now, this just changes
+    // how long a model this turn loads stays around afterward, decided
+    // per-conversation (see Conversation::keepAliveSeconds).
     void sendChatMessage(const QString &conversationId, const QString &model, const QJsonArray &messages,
                           bool think = true, int customNumCtx = 0,
-                          const GenerationOptions &genOptions = GenerationOptions());
+                          const GenerationOptions &genOptions = GenerationOptions(),
+                          int keepAliveSeconds = kKeepAliveUseServerDefault);
 
     // Aborts the in-flight chat stream for the given conversationId, if any.
     // Safe to call when none is active; doesn't touch any other

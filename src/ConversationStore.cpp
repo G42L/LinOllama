@@ -203,6 +203,20 @@ void ConversationStore::setConversationModel(const QString &id, const QString &m
     persist(c);
 }
 
+void ConversationStore::setConversationKeepAlive(const QString &id, int keepAliveSeconds)
+{
+    const int idx = indexOf(id);
+    if (idx < 0)
+        return;
+
+    Conversation &c = m_conversations[idx];
+    if (c.keepAliveSeconds == keepAliveSeconds)
+        return;
+
+    c.keepAliveSeconds = keepAliveSeconds;
+    persist(c);
+}
+
 void ConversationStore::persist(const Conversation &conversation) const
 {
     QDir dir(storageDir());

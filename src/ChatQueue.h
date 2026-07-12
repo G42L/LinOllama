@@ -44,6 +44,7 @@ public:
         bool think = true;
         int customNumCtx = 0;
         GenerationOptions genOptions;
+        int keepAliveSeconds = kKeepAliveUseServerDefault;
     };
 
     explicit ChatQueue(OllamaClient *ollamaClient, QObject *parent = nullptr);

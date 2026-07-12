@@ -72,7 +72,7 @@ struct OllamaClient::ChatStream
 
 void OllamaClient::sendChatMessage(const QString &conversationId, const QString &model,
                                     const QJsonArray &messages, bool think, int customNumCtx,
-                                    const GenerationOptions &genOptions)
+                                    const GenerationOptions &genOptions, int keepAliveSeconds)
 {
     abortChat(conversationId); // replace this conversation's own previous stream, if any — others are untouched
 
@@ -106,6 +106,8 @@ void OllamaClient::sendChatMessage(const QString &conversationId, const QString 
     }
     if (!options.isEmpty())
         body["options"] = options;
+    if (keepAliveSeconds != kKeepAliveUseServerDefault)
+        body["keep_alive"] = keepAliveSeconds;
 
     auto *stream = new ChatStream;
     stream->reply = m_manager.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));

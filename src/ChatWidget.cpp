@@ -217,6 +217,23 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
             this, &ChatWidget::onModelComboChanged);
     toolLayout->addWidget(m_modelCombo);
 
+    // Per-conversation keep_alive — the lighter-weight sibling of the tray/
+    // Settings "offload model" button (see Conversation::keepAliveSeconds).
+    // Same flat/borderless toolbar styling as m_modelCombo, no separate
+    // label for the same reason that one doesn't have one.
+    m_keepAliveCombo = new QComboBox;
+    m_keepAliveCombo->setObjectName("keepAliveCombo");
+    m_keepAliveCombo->setToolTip("How long to keep this conversation's model loaded after replying");
+    m_keepAliveCombo->addItem("Keep alive: Default", kKeepAliveUseServerDefault);
+    m_keepAliveCombo->addItem("5 minutes", 300);
+    m_keepAliveCombo->addItem("30 minutes", 1800);
+    m_keepAliveCombo->addItem("1 hour", 3600);
+    m_keepAliveCombo->addItem("Until manually unloaded", -1);
+    m_keepAliveCombo->addItem("Unload right after reply", 0);
+    connect(m_keepAliveCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &ChatWidget::onKeepAliveComboChanged);
+    toolLayout->addWidget(m_keepAliveCombo);
+
     // Push-to-talk: pressed()/released() (not clicked()) so holding the
     // button down brackets the recording, matching "hold press to record."
     m_voiceButton = new QToolButton;
@@ -440,6 +457,16 @@ void ChatWidget::setActiveConversation(const QString &conversationId)
     // has no notion of "switch models mid-chat" and doing so silently would
     // just confuse whatever context the new model doesn't share.
     m_modelCombo->setEnabled(conv->messages.isEmpty());
+
+    {
+        m_keepAliveCombo->blockSignals(true);
+        const int idx = m_keepAliveCombo->findData(conv->keepAliveSeconds);
+        // findData() misses if an old/foreign value snuck in (e.g. hand-
+        // edited JSON) — falls back to "Default" rather than leaving
+        // whatever the previous conversation's selection happened to be.
+        m_keepAliveCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        m_keepAliveCombo->blockSignals(false);
+    }
 
     // Reconnects a live bubble automatically if this conversation still has
     // a stream running in the background (see reconnectStreamingBubble()).
@@ -1138,6 +1165,7 @@ void ChatWidget::streamAssistantReplyForCurrentHistory()
     turn.think = m_thinkingEnabled;
     turn.customNumCtx = customNumCtx;
     turn.genOptions = genOptions;
+    turn.keepAliveSeconds = conv->keepAliveSeconds;
     m_chatQueue->enqueue(turn);
 }
 
@@ -1451,6 +1479,14 @@ void ChatWidget::onModelComboChanged(int index)
 
     ensureContextLengthKnown(model);
     updateContextUsageDisplay();
+}
+
+void ChatWidget::onKeepAliveComboChanged(int index)
+{
+    if (m_activeConversationId.isEmpty())
+        return;
+    const int keepAliveSeconds = m_keepAliveCombo->itemData(index).toInt();
+    m_store->setConversationKeepAlive(m_activeConversationId, keepAliveSeconds);
 }
 
 void ChatWidget::onQueueTurnStarted(const QString &conversationId)

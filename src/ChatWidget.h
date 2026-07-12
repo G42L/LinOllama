@@ -171,6 +171,7 @@ private slots:
     void onModelContextLengthFetched(const QString &model, int contextLength);
     void onModelMetadataFetched(const QString &model, const ModelMetadata &metadata);
     void onModelComboChanged(int index);
+    void onKeepAliveComboChanged(int index);
 
     // ChatQueue's own progress signals — see setModelOptimizationEnabled()
     // and streamAssistantReplyForCurrentHistory() for how turns get there.
@@ -408,6 +409,11 @@ private:
     ThinkingSectionWidget *m_streamingThinkingWidget = nullptr; // created lazily on the first thinking token, if any
 
     QComboBox *m_modelCombo = nullptr;
+    // Per-conversation keep_alive choice — see Conversation::keepAliveSeconds
+    // and onKeepAliveComboChanged(). Unlike m_modelCombo, always enabled:
+    // keep_alive only affects the *next* turn's request, so it's never
+    // "locked in" by existing messages the way the model itself is.
+    QComboBox *m_keepAliveCombo = nullptr;
 
     QScrollArea *m_scrollArea = nullptr;
     QWidget *m_messagesContainer = nullptr;

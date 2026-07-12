@@ -63,6 +63,13 @@ public:
     // they actually picked, not just whatever it was created with.
     void setConversationModel(const QString &id, const QString &model);
 
+    // Updates the conversation's own keep_alive preference and persists the
+    // change — unlike setConversationModel(), this is never locked once a
+    // conversation has messages, since it only affects how long the model
+    // stays loaded *after* the next reply, not anything about the request
+    // history itself. Takes effect starting with the next turn sent.
+    void setConversationKeepAlive(const QString &id, int keepAliveSeconds);
+
     // Drops every message from `index` onward (inclusive), and persists the
     // change — used when editing or retrying an earlier user message, since
     // everything after it has to be regenerated. No-op if index is out of range.
