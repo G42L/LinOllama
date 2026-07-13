@@ -10,9 +10,9 @@ A beautiful native Linux desktop client for Ollama.
 
 <p align="center">
 
-![License](https://img.shields.io/github/license/glegigan/LinOllama)
-![Stars](https://img.shields.io/github/stars/glegigan/LinOllama)
-![Release](https://img.shields.io/github/v/release/glegigan/LinOllama)
+![License](https://img.shields.io/github/license/g42l/LinOllama)
+![Stars](https://img.shields.io/github/stars/g42l/LinOllama)
+![Release](https://img.shields.io/github/v/release/g42l/LinOllama)
 ![Qt6](https://img.shields.io/badge/Qt-6-green)
 ![Linux](https://img.shields.io/badge/Linux-supported-blue)
 
