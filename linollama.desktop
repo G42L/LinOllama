@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=LinOllama GUI
+GenericName=LinOllama Client
+Comment=Chat with local Ollama models, with a tray presence for server control
+Exec="/mnt/Samsung 4Tb/Applications/LinOllama/build/linollama"
+Icon=/mnt/Samsung 4Tb/Applications/LinOllama/src/icons/ollama-app-icon.svg
+Terminal=false
+Categories=Network;Chat;
+StartupNotify=true

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ollama-tray LANGUAGES CXX)
+project(linollama LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,7 +9,7 @@ set(CMAKE_AUTOUIC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia Svg WebEngineWidgets WebChannel)
 
-add_executable(ollama-tray
+add_executable(linollama
     src/main.cpp
     src/TrayApplication.cpp
     src/TrayApplication.h
@@ -65,7 +65,7 @@ add_executable(ollama-tray
     src/resources.qrc
 )
 
-target_link_libraries(ollama-tray
+target_link_libraries(linollama
     PRIVATE
         Qt6::Core
         Qt6::Widgets
@@ -77,6 +77,6 @@ target_link_libraries(ollama-tray
         ${CMAKE_DL_LIBS}
 )
 
-target_include_directories(ollama-tray PRIVATE src)
+target_include_directories(linollama PRIVATE src)
 
-install(TARGETS ollama-tray RUNTIME DESTINATION bin)
+install(TARGETS linollama RUNTIME DESTINATION bin)

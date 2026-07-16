@@ -39,7 +39,7 @@ void WebSearchClient::search(const QString &query)
 
     QNetworkRequest request(url);
     // Wikimedia's API etiquette asks for a descriptive, non-generic User-Agent.
-    request.setHeader(QNetworkRequest::UserAgentHeader, "ollama-tray/1.0 (local desktop chat client)");
+    request.setHeader(QNetworkRequest::UserAgentHeader, "LinOllama/1.0 (local desktop chat client)");
 
     QNetworkReply *reply = m_manager.get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply, query]() {

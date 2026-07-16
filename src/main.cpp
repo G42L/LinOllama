@@ -76,8 +76,8 @@ int main(int argc, char *argv[])
     // Needed before any QSettings use (ThemeManager persists the theme
     // choice there) — otherwise Qt falls back to per-call defaults instead
     // of a stable settings file/registry key.
-    QCoreApplication::setOrganizationName("ollama-tray");
-    QCoreApplication::setApplicationName("ollama-tray");
+    QCoreApplication::setOrganizationName("LinOllama");
+    QCoreApplication::setApplicationName("LinOllama");
 
     // A tray-only app must not quit when its window is closed (it hides
     // instead, see MainWindow::closeEvent) — only the tray menu's Quit does.

@@ -252,7 +252,7 @@ void VoiceRecorder::stopRecording()
         out[i] = static_cast<qint16>(clamped * 32767.0f);
     }
 
-    const QString path = pickOutputDir() + "/ollama-tray-voice-"
+    const QString path = pickOutputDir() + "/linollama-voice-"
         + QUuid::createUuid().toString(QUuid::WithoutBraces) + ".wav";
     if (!writeWavFile(path, pcm16, kTargetSampleRate, kTargetChannels)) {
         emit recordingFailed("Couldn't write the recorded audio to disk.");

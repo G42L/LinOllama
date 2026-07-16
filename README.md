@@ -305,15 +305,21 @@ entirely at runtime.
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/ollama-tray
+./build/linollama
+```
+
+Or a one-line build command
+```bash
+rm -rf build && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+./build/linollama
 ```
 
 There's no install step required to run it locally; `cmake --install build`
 will place the binary under `bin/` (via `RUNTIME DESTINATION bin`) if you
 want it on `PATH` elsewhere.
 
-**Launching from an app menu**: `ollama-tray.desktop` (checked in at the
-repo root) points at this checkout's own `build/ollama-tray` and
+**Launching from an app menu**: `linollama.desktop` (checked in at the
+repo root) points at this checkout's own `build/linollama` and
 `src/icons/ollama-app-icon.svg` — a static-color copy of the in-app themed
 icon, since a `.desktop` file can't do the `{{iconColor}}` light/dark
 substitution the app itself does at runtime (see `Theme::loadThemedIcon()`).
@@ -321,7 +327,7 @@ Copy or symlink it into `~/.local/share/applications/` to add it to your
 launcher:
 
 ```bash
-ln -s "$(pwd)/ollama-tray.desktop" ~/.local/share/applications/
+ln -s "$(pwd)/linollama.desktop" ~/.local/share/applications/
 update-desktop-database ~/.local/share/applications  # optional, most DEs pick it up automatically
 ```
 
@@ -330,9 +336,9 @@ See Limitations if you move this checkout elsewhere afterward.
 ## 🗂️ Data & configuration
 
 - **Conversations**: one JSON file per conversation, at
-  `~/.local/share/ollama-tray/conversations/<uuid>.json`. Deleting one
+  `~/.local/share/LinOllama/LinOllama/conversations/<uuid>.json`. Deleting one
   through the app removes its file; there's no separate export/import.
-- **Settings**: `~/.config/ollama-tray/ollama-tray.conf` (theme, accent/meter
+- **Settings**: `~/.config/LinOllama/LinOllama.conf` (theme, accent/meter
   colors, send button style, context-length override, model-optimization
   toggle, Whisper binary/models-folder/selected-model paths, microphone
   device, Ollama server environment overrides). Delete this file to reset
@@ -358,7 +364,7 @@ See Limitations if you move this checkout elsewhere afterward.
   (e.g. Brave Search) would need a user-supplied API key in Settings, which
   isn't built yet.
 - **Only built-in tools, no custom/user-defined ones.** Tool calling is
-  limited to the four tools ollama-tray ships with — there's no Settings
+  limited to the four tools LinOllama ships with — there's no Settings
   UI yet for defining your own (e.g. a webhook-backed tool). A single turn
   also caps at 4 chained tool-call rounds before the app forces a final
   answer, as a guard against a model that keeps calling tools without ever
@@ -390,8 +396,8 @@ See Limitations if you move this checkout elsewhere afterward.
 - **Conversations can't be renamed** through the UI (only auto-titled from
   the first message), and there's no rename/archive/export flow.
 - **The `.desktop` launcher entry points at a `build/` path, not an
-  installed one** — `ollama-tray.desktop`'s `Exec`/`Icon` reference this
-  checkout's own `build/ollama-tray` binary and `src/icons/` directly
+  installed one** — `linollama.desktop`'s `Exec`/`Icon` reference this
+  checkout's own `build/linollama` binary and `src/icons/` directly
   (there's no `make install` step that copies them anywhere system-wide),
   so it'll break if this directory is moved and needs re-generating/editing
   by hand for a packaged install.
