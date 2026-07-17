@@ -200,6 +200,11 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     }
 }
 
+void MainWindow::discardEmptyActiveConversation()
+{
+    m_chatWidget->discardConversationIfEmpty(m_chatWidget->activeConversationId());
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     // Tray app convention: closing the window just hides it, doesn't quit

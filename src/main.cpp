@@ -131,6 +131,12 @@ int main(int argc, char *argv[])
     TrayApplication trayApp(&systemMonitor, &ollamaClient, &serverController, &conversationStore, &mainWindow, &themeManager);
     mainWindow.show();
 
+    // Cleans up a still-empty "New conversation" left open when the app
+    // quits (tray menu's Quit, see TrayApplication) — same rule ChatWidget
+    // already applies when switching away from an empty conversation, see
+    // ChatWidget::discardConversationIfEmpty().
+    QObject::connect(&app, &QApplication::aboutToQuit, &mainWindow, &MainWindow::discardEmptyActiveConversation);
+
     systemMonitor.start(1500);
 
     QTimer reachabilityTimer;

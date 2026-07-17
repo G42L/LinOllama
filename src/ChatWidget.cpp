@@ -463,7 +463,14 @@ void ChatWidget::setActiveConversation(const QString &conversationId)
     m_pendingAttachments.clear();
     rebuildAttachmentsBar();
 
+    const QString previousConversationId = m_activeConversationId;
     m_activeConversationId = conversationId;
+
+    // Leaving an empty "New conversation" behind (e.g. clicking + then
+    // navigating away without typing anything) shouldn't leave it cluttering
+    // the sidebar forever.
+    if (previousConversationId != conversationId)
+        discardConversationIfEmpty(previousConversationId);
 
     const bool hasConversation = !conversationId.isEmpty();
     m_scrollArea->setVisible(hasConversation);
@@ -518,6 +525,24 @@ void ChatWidget::setActiveConversation(const QString &conversationId)
     if (!conv->model.isEmpty())
         ensureContextLengthKnown(conv->model);
     updateContextUsageDisplay();
+}
+
+void ChatWidget::discardConversationIfEmpty(const QString &conversationId)
+{
+    // Never a conversation still generating a reply in the background —
+    // that would silently kill a turn the user is still waiting on (also
+    // covers the case where conversationId is still the active one, e.g.
+    // called from MainWindow on app quit: a streaming reply keeps a
+    // conversation from being "empty" in spirit even before its first
+    // message is persisted).
+    if (conversationId.isEmpty() || m_streams.contains(conversationId))
+        return;
+
+    const Conversation *conv = m_store->find(conversationId);
+    if (!conv || !conv->messages.isEmpty() || conv->title != "New conversation")
+        return;
+
+    m_store->deleteConversation(conversationId);
 }
 
 void ChatWidget::dockInputBar(bool inEmptyState)

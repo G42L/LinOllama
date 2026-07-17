@@ -37,6 +37,12 @@ public:
                WhisperManager *whisperManager,
                QWidget *parent = nullptr);
 
+    // Deletes the active conversation if it's still completely empty (see
+    // ChatWidget::discardConversationIfEmpty) — connected to
+    // QApplication::aboutToQuit in main.cpp so a "New conversation" left
+    // open when the app quits doesn't linger on disk.
+    void discardEmptyActiveConversation();
+
 protected:
     void closeEvent(QCloseEvent *event) override;
     // Watches m_sidebarList for QEvent::Resize (e.g. dragging the splitter)

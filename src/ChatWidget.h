@@ -62,6 +62,15 @@ public:
 
     QString activeConversationId() const { return m_activeConversationId; }
 
+    // Deletes conversationId if it's still completely untouched — no
+    // messages and never renamed away from "New conversation" — and isn't
+    // generating a reply in the background. A no-op otherwise (including if
+    // conversationId is empty or unknown). Called from setActiveConversation()
+    // for the conversation being switched *away* from, and by MainWindow when
+    // the app is about to quit with an empty conversation still on screen, so
+    // a chat the user never actually used doesn't linger in the sidebar/on disk.
+    void discardConversationIfEmpty(const QString &conversationId);
+
     // Applies the "Send" button's style — one of "plane" (default), "arrow",
     // or "text" (see SettingsDialog's "Send button" combo) — and persists
     // nothing itself; the caller reads the persisted QSettings value, this
