@@ -1,6 +1,7 @@
 #include "TrayApplication.h"
 #include "MainWindow.h"
 #include "ThemeManager.h"
+#include "ConversationStore.h"
 #include "Theme.h"
 
 #include <QApplication>
@@ -9,6 +10,11 @@
 #include <QPainter>
 #include <QTimer>
 #include <QDebug>
+#include <QFileDialog>
+#include <QFile>
+#include <QMessageBox>
+#include <QStandardPaths>
+#include <QSettings>
 
 namespace {
 // Icon-theme lookups (QIcon::fromTheme) are unreliable across desktop
@@ -35,6 +41,7 @@ QIcon fallbackIcon()
 TrayApplication::TrayApplication(SystemMonitor *systemMonitor,
                                   OllamaClient *ollamaClient,
                                   ServerController *serverController,
+                                  ConversationStore *conversationStore,
                                   MainWindow *mainWindow,
                                   ThemeManager *themeManager,
                                   QObject *parent)
@@ -42,6 +49,7 @@ TrayApplication::TrayApplication(SystemMonitor *systemMonitor,
     , m_systemMonitor(systemMonitor)
     , m_ollamaClient(ollamaClient)
     , m_serverController(serverController)
+    , m_conversationStore(conversationStore)
     , m_mainWindow(mainWindow)
     , m_themeManager(themeManager)
 {
@@ -114,6 +122,13 @@ void TrayApplication::buildMenu()
     // at all — means the submenu already has fresh data by the time it's
     // opened, regardless of whether its own aboutToShow round-trips.
     connect(&m_menu, &QMenu::aboutToShow, this, &TrayApplication::onOffloadMenuAboutToShow);
+
+    m_backupMenu = m_menu.addMenu("Backup and restore");
+    m_backupMenu->addAction("Export all conversations…", this, &TrayApplication::onExportAllConversationsClicked);
+    m_backupMenu->addAction("Import conversations…", this, &TrayApplication::onImportConversationsClicked);
+    m_backupMenu->addSeparator();
+    m_backupMenu->addAction("Export settings…", this, &TrayApplication::onExportSettingsClicked);
+    m_backupMenu->addAction("Import settings…", this, &TrayApplication::onImportSettingsClicked);
 
     m_openAction = m_menu.addAction("Open Ollama GUI", this, [this]() {
         if (!m_mainWindow)
@@ -253,6 +268,81 @@ QString TrayApplication::modeLabel(ServerController::RunMode mode)
     case ServerController::RunMode::Unknown:
     default:                                       return "unknown";
     }
+}
+
+void TrayApplication::onExportAllConversationsClicked()
+{
+    const QString defaultPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+        + "/LinOllama-conversations.json";
+    const QString path = QFileDialog::getSaveFileName(
+        m_mainWindow, "Export all conversations", defaultPath, "JSON files (*.json)");
+    if (path.isEmpty())
+        return;
+
+    if (!m_conversationStore->exportAll(path)) {
+        QMessageBox::warning(m_mainWindow, "Export failed", "Couldn't write to \"" + path + "\".");
+    } else {
+        m_trayIcon.showMessage("LinOllama", "Exported all conversations to \"" + path + "\".",
+                                QSystemTrayIcon::Information, 3000);
+    }
+}
+
+void TrayApplication::onImportConversationsClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        m_mainWindow, "Import conversations", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        "JSON files (*.json);;All files (*)");
+    if (path.isEmpty())
+        return;
+
+    const int count = m_conversationStore->importAll(path);
+    if (count < 0) {
+        QMessageBox::warning(m_mainWindow, "Import failed",
+            "\"" + path + "\" doesn't look like a LinOllama conversations export.");
+    } else {
+        m_trayIcon.showMessage("LinOllama", QString("Imported %1 conversation(s).").arg(count),
+                                QSystemTrayIcon::Information, 3000);
+    }
+}
+
+void TrayApplication::onExportSettingsClicked()
+{
+    const QString sourcePath = QSettings().fileName();
+    const QString defaultPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+        + "/LinOllama-settings.conf";
+    const QString path = QFileDialog::getSaveFileName(
+        m_mainWindow, "Export settings", defaultPath, "Settings files (*.conf);;All files (*)");
+    if (path.isEmpty())
+        return;
+
+    QFile::remove(path); // QFile::copy() refuses to overwrite an existing file
+    if (!QFile::copy(sourcePath, path))
+        QMessageBox::warning(m_mainWindow, "Export failed", "Couldn't write to \"" + path + "\".");
+}
+
+void TrayApplication::onImportSettingsClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        m_mainWindow, "Import settings", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        "Settings files (*.conf);;All files (*)");
+    if (path.isEmpty())
+        return;
+
+    if (QMessageBox::question(m_mainWindow, "Import settings",
+            "This replaces every current setting with the ones from \"" + path + "\". "
+            "Restart LinOllama afterward for everything to take effect. Continue?")
+        != QMessageBox::Yes)
+        return;
+
+    const QString destPath = QSettings().fileName();
+    QFile::remove(destPath);
+    if (!QFile::copy(path, destPath)) {
+        QMessageBox::warning(m_mainWindow, "Import failed", "Couldn't read \"" + path + "\".");
+        return;
+    }
+
+    QMessageBox::information(m_mainWindow, "Import settings",
+        "Settings imported. Restart LinOllama for all changes to take effect.");
 }
 
 QString TrayApplication::formatKB(quint64 kb)

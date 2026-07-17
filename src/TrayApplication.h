@@ -11,6 +11,7 @@
 
 class MainWindow;
 class ThemeManager;
+class ConversationStore;
 
 // Owns the tray icon, its context menu, the live CPU/RAM/GPU tooltip, and
 // server start/stop (delegated to ServerController). SystemMonitor,
@@ -24,6 +25,7 @@ public:
     TrayApplication(SystemMonitor *systemMonitor,
                      OllamaClient *ollamaClient,
                      ServerController *serverController,
+                     ConversationStore *conversationStore,
                      MainWindow *mainWindow,
                      ThemeManager *themeManager,
                      QObject *parent = nullptr);
@@ -47,6 +49,15 @@ private slots:
     void onLoadedModelsListed(const QVector<LoadedModelInfo> &models);
     void onModelUnloaded(const QString &model, bool success);
 
+    // Backup submenu — quick access to the same operations as Settings' Data
+    // tab, without opening the main window first. See ConversationStore::
+    // exportAll()/importAll() and QSettings().fileName() for the underlying
+    // storage.
+    void onExportAllConversationsClicked();
+    void onImportConversationsClicked();
+    void onExportSettingsClicked();
+    void onImportSettingsClicked();
+
 private:
     void buildMenu();
     static QString formatKB(quint64 kb);
@@ -64,11 +75,13 @@ private:
     QAction *m_openAction = nullptr;     // shows MainWindow
     QAction *m_quitAction = nullptr;
     QMenu *m_offloadMenu = nullptr;      // "Offload model" submenu, populated from GET /api/ps
+    QMenu *m_backupMenu = nullptr;       // "Backup" submenu — export/import conversations and settings
 
     // Non-owning — lifetime managed by main().
     SystemMonitor *m_systemMonitor = nullptr;
     OllamaClient *m_ollamaClient = nullptr;
     ServerController *m_serverController = nullptr;
+    ConversationStore *m_conversationStore = nullptr;
     MainWindow *m_mainWindow = nullptr;
     ThemeManager *m_themeManager = nullptr;
 

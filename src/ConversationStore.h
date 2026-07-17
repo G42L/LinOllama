@@ -46,6 +46,27 @@ public:
     // from the file. Persists immediately and returns the new id.
     QString importConversation(Conversation conversation);
 
+    // Directory conversations are stored in on disk — exposed for the
+    // Settings dialog's "Data" tab and the tray's Backup menu to show/open,
+    // not for callers to read conversation files from directly (use
+    // conversations()/find() for that).
+    QString conversationsDirPath() const { return storageDir(); }
+
+    // Writes every conversation currently in the store to one JSON file at
+    // `path`, as {"conversations": [...]} using the same per-conversation
+    // shape as Conversation::toJson()/persist() — a full backup, batched
+    // instead of one file per conversation. Returns false on write failure.
+    bool exportAll(const QString &path) const;
+
+    // Reads a bundle written by exportAll() — or tolerates a bare array of
+    // conversations, or a single exported conversation object (see
+    // MainWindow::exportConversation()) — and imports each entry via
+    // importConversation(), so re-running this on the same file, or one that
+    // overlaps with conversations already in the store, can never overwrite
+    // anything. Returns the number of conversations imported, or -1 if the
+    // file couldn't be opened or didn't parse as any of the above shapes.
+    int importAll(const QString &path);
+
     // Appends a message to the given conversation, auto-derives a title
     // from the first user message if the conversation doesn't have one yet,
     // and persists the change.
@@ -63,6 +84,12 @@ public:
 
     void renameConversation(const QString &id, const QString &newTitle);
     void deleteConversation(const QString &id);
+
+    // Deletes every conversation file on disk and clears the in-memory list
+    // — the Settings "Data" tab's "Clear conversations"/"Clear all" actions.
+    // Irreversible; callers are expected to have already confirmed with the
+    // user before calling this.
+    void clearAll();
 
     // Updates the conversation's pinned model and persists the change —
     // only meaningful before it has any messages (ChatWidget disables its

@@ -128,7 +128,7 @@ int main(int argc, char *argv[])
     WhisperManager whisperManager;
 
     MainWindow mainWindow(&systemMonitor, &ollamaClient, &conversationStore, &themeManager, &whisperManager);
-    TrayApplication trayApp(&systemMonitor, &ollamaClient, &serverController, &mainWindow, &themeManager);
+    TrayApplication trayApp(&systemMonitor, &ollamaClient, &serverController, &conversationStore, &mainWindow, &themeManager);
     mainWindow.show();
 
     systemMonitor.start(1500);

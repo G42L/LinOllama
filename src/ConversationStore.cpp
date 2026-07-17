@@ -4,6 +4,8 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QUuid>
 #include <QDebug>
 #include <algorithm>
@@ -185,6 +187,14 @@ void ConversationStore::deleteConversation(const QString &id)
     emit conversationListChanged();
 }
 
+void ConversationStore::clearAll()
+{
+    for (const Conversation &c : m_conversations)
+        QFile::remove(filePathFor(c.id));
+    m_conversations.clear();
+    emit conversationListChanged();
+}
+
 void ConversationStore::truncateMessagesFrom(const QString &conversationId, int index)
 {
     const int idx = indexOf(conversationId);
@@ -225,6 +235,52 @@ void ConversationStore::setConversationKeepAlive(const QString &id, int keepAliv
 
     c.keepAliveSeconds = keepAliveSeconds;
     persist(c);
+}
+
+bool ConversationStore::exportAll(const QString &path) const
+{
+    QJsonArray arr;
+    for (const Conversation &c : m_conversations)
+        arr.append(c.toJson());
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+
+    const QJsonObject bundle{{"conversations", arr}};
+    file.write(QJsonDocument(bundle).toJson(QJsonDocument::Indented));
+    return true;
+}
+
+int ConversationStore::importAll(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+        return -1;
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
+    if (parseError.error != QJsonParseError::NoError)
+        return -1;
+
+    QJsonArray arr;
+    if (doc.isObject() && doc.object().contains("conversations"))
+        arr = doc.object().value("conversations").toArray();
+    else if (doc.isArray())
+        arr = doc.array();
+    else if (doc.isObject() && doc.object().contains("messages"))
+        arr.append(doc.object()); // tolerate a single exported conversation file
+    else
+        return -1;
+
+    int count = 0;
+    for (const QJsonValue &v : arr) {
+        if (!v.isObject())
+            continue;
+        importConversation(Conversation::fromJson(v.toObject()));
+        ++count;
+    }
+    return count;
 }
 
 void ConversationStore::persist(const Conversation &conversation) const

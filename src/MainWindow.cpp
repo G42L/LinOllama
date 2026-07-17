@@ -307,7 +307,7 @@ void MainWindow::onModelsListed(const QStringList &modelNames)
 
 void MainWindow::onSettingsRequested()
 {
-    SettingsDialog dialog(m_themeManager, m_ollamaClient, m_whisperManager, this);
+    SettingsDialog dialog(m_themeManager, m_ollamaClient, m_store, m_whisperManager, this);
     connect(&dialog, &SettingsDialog::sendButtonStyleChanged,
             m_chatWidget, &ChatWidget::setSendButtonStyle);
     connect(&dialog, &SettingsDialog::sendButtonFilledChanged,

@@ -6,6 +6,7 @@
 #include <QString>
 #include "ThemeManager.h"
 #include "OllamaClient.h"
+#include "ConversationStore.h"
 #include "WhisperManager.h"
 
 class QComboBox;
@@ -32,6 +33,7 @@ class SettingsDialog : public QDialog
 
 public:
     explicit SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
+                             ConversationStore *conversationStore,
                              WhisperManager *whisperManager, QWidget *parent = nullptr);
 
 signals:
@@ -150,6 +152,22 @@ private slots:
     // no separate fetch call needed here.
     void onInstalledModelsListed(const QStringList &modelNames);
 
+    // Data tab: storage locations + backup/restore — see ConversationStore::
+    // exportAll()/importAll() for the conversations bundle format, and
+    // QSettings().fileName() for where the settings file itself lives.
+    void onOpenConversationsFolderClicked();
+    void onOpenSettingsFolderClicked();
+    void onExportAllConversationsClicked();
+    void onImportConversationsClicked();
+    void onExportSettingsClicked();
+    void onImportSettingsClicked();
+
+    // Data tab's "Clear Data" group — all irreversible, all gated behind
+    // confirmDestructive() below.
+    void onClearConfigurationClicked();
+    void onClearConversationsClicked();
+    void onClearAllClicked();
+
 private:
     void rebuildLoadedModelsList(const QVector<LoadedModelInfo> &models);
     void clearLoadedModelsList();
@@ -163,6 +181,14 @@ private:
     // tracks the Application color, so changing that one has to refresh
     // every other swatch as well).
     QWidget *makeColorPickerRow(const QString &settingsKey);
+
+    // Shows a QMessageBox::Warning with a Cancel button (default) and a
+    // red "dangerButton"-styled confirm button labeled `confirmLabel` — same
+    // pattern as MainWindow::confirmAndDeleteConversation(). Returns true
+    // only if the confirm button was actually clicked. Used by the Data
+    // tab's "Clear Data" actions.
+    bool confirmDestructive(const QString &title, const QString &text,
+                             const QString &informativeText, const QString &confirmLabel);
 
     // Rebuilds m_whisperModelsTable's rows from scratch — the catalog is
     // fixed, so this just re-derives each row's install/selection/download
@@ -227,6 +253,7 @@ private:
 
     ThemeManager *m_themeManager = nullptr;
     OllamaClient *m_ollamaClient = nullptr;
+    ConversationStore *m_conversationStore = nullptr; // non-owning — see the Data tab's backup/restore actions
 
     QComboBox *m_themeCombo = nullptr;
     // "Theme color": Default / one of 8 curated presets / Custom — a quick

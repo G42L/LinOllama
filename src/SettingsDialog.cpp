@@ -37,6 +37,10 @@
 #include <QLinearGradient>
 #include <iterator>
 #include <QMessageBox>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QStandardPaths>
+#include <QFile>
 
 namespace {
 // Every color the "Theme color" combo (see the Appearance tab) treats as
@@ -84,10 +88,12 @@ const char *kRainbowColors[] = {
 }
 
 SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
+                                ConversationStore *conversationStore,
                                 WhisperManager *whisperManager, QWidget *parent)
     : QDialog(parent)
     , m_themeManager(themeManager)
     , m_ollamaClient(ollamaClient)
+    , m_conversationStore(conversationStore)
     , m_whisperManager(whisperManager)
 {
     setWindowTitle("Settings");
@@ -111,6 +117,8 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     auto *ollamaPageLayout = new QVBoxLayout(ollamaPage);
     auto *whisperPage = new QWidget;
     auto *whisperPageLayout = new QVBoxLayout(whisperPage);
+    auto *dataPage = new QWidget;
+    auto *dataPageLayout = new QVBoxLayout(dataPage);
 
     tabs->addTab(appearancePage, "Appearance");
     tabs->addTab(inputsPage, "Inputs");
@@ -129,6 +137,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     ollamaScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     tabs->addTab(ollamaScrollArea, "Ollama");
     tabs->addTab(whisperPage, "Whisper");
+    tabs->addTab(dataPage, "Data");
 
     // --- Appearance tab ----------------------------------------------------
     // Wrapped in a bordered QGroupBox (rather than a bare QLabel heading)
@@ -695,6 +704,115 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     whisperPageLayout->addWidget(whisperGroup);
     whisperPageLayout->addStretch();
+
+    // --- Data tab: storage locations + backup/restore -----------------------
+    auto *storageGroup = new QGroupBox("Storage locations");
+    auto *storageLayout = new QFormLayout(storageGroup);
+
+    auto *storageHint = new QLabel(
+        "Every conversation lives as its own JSON file under the folder below; app settings "
+        "(theme, server environment, generation defaults, etc.) live in the settings file below "
+        "that. Nothing here is normally worth touching by hand — this is just so the files are easy "
+        "to find, e.g. to back them up yourself outside the app.");
+    storageHint->setWordWrap(true);
+    storageHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    storageLayout->addRow(storageHint);
+
+    auto *conversationsPathRow = new QHBoxLayout;
+    auto *conversationsPathLabel = new QLabel(m_conversationStore->conversationsDirPath());
+    conversationsPathLabel->setWordWrap(true);
+    conversationsPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    conversationsPathRow->addWidget(conversationsPathLabel, /*stretch=*/1);
+    auto *openConversationsFolderButton = new QPushButton("Open Folder");
+    connect(openConversationsFolderButton, &QPushButton::clicked,
+            this, &SettingsDialog::onOpenConversationsFolderClicked);
+    conversationsPathRow->addWidget(openConversationsFolderButton);
+    storageLayout->addRow("Conversations", conversationsPathRow);
+
+    auto *settingsPathRow = new QHBoxLayout;
+    auto *settingsPathLabel = new QLabel(QSettings().fileName());
+    settingsPathLabel->setWordWrap(true);
+    settingsPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    settingsPathRow->addWidget(settingsPathLabel, /*stretch=*/1);
+    auto *openSettingsFolderButton = new QPushButton("Open Folder");
+    connect(openSettingsFolderButton, &QPushButton::clicked,
+            this, &SettingsDialog::onOpenSettingsFolderClicked);
+    settingsPathRow->addWidget(openSettingsFolderButton);
+    storageLayout->addRow("Settings", settingsPathRow);
+
+    dataPageLayout->addWidget(storageGroup);
+
+    auto *backupGroup = new QGroupBox("Backup and Restore");
+    auto *backupLayout = new QVBoxLayout(backupGroup);
+
+    auto *conversationsBackupRow = new QHBoxLayout;
+    auto *exportConversationsButton = new QPushButton("Export all conversations…");
+    connect(exportConversationsButton, &QPushButton::clicked,
+            this, &SettingsDialog::onExportAllConversationsClicked);
+    conversationsBackupRow->addWidget(exportConversationsButton);
+    auto *importConversationsButton = new QPushButton("Import conversations…");
+    connect(importConversationsButton, &QPushButton::clicked,
+            this, &SettingsDialog::onImportConversationsClicked);
+    conversationsBackupRow->addWidget(importConversationsButton);
+    backupLayout->addLayout(conversationsBackupRow);
+
+    auto *conversationsBackupHint = new QLabel(
+        "Export bundles every conversation into one JSON file. Import always adds conversations as "
+        "new entries (fresh ids) — it never overwrites or removes anything already here, so "
+        "importing the same backup twice just duplicates it.");
+    conversationsBackupHint->setWordWrap(true);
+    conversationsBackupHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    backupLayout->addWidget(conversationsBackupHint);
+
+    auto *settingsBackupRow = new QHBoxLayout;
+    auto *exportSettingsButton = new QPushButton("Export settings…");
+    connect(exportSettingsButton, &QPushButton::clicked,
+            this, &SettingsDialog::onExportSettingsClicked);
+    settingsBackupRow->addWidget(exportSettingsButton);
+    auto *importSettingsButton = new QPushButton("Import settings…");
+    connect(importSettingsButton, &QPushButton::clicked,
+            this, &SettingsDialog::onImportSettingsClicked);
+    settingsBackupRow->addWidget(importSettingsButton);
+    backupLayout->addLayout(settingsBackupRow);
+
+    auto *settingsBackupHint = new QLabel(
+        "Import replaces every current setting with whatever's in the chosen file — restart "
+        "LinOllama afterward so everything picks it up.");
+    settingsBackupHint->setWordWrap(true);
+    settingsBackupHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    backupLayout->addWidget(settingsBackupHint);
+
+    dataPageLayout->addWidget(backupGroup);
+
+    auto *clearGroup = new QGroupBox("Clear Data");
+    auto *clearLayout = new QVBoxLayout(clearGroup);
+
+    auto *clearHint = new QLabel(
+        "Irreversible — consider exporting a backup above first.");
+    clearHint->setWordWrap(true);
+    clearHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    clearLayout->addWidget(clearHint);
+
+    auto *clearRow = new QHBoxLayout;
+    auto *clearConfigButton = new QPushButton("Clear Configuration");
+    clearConfigButton->setObjectName("dangerButton");
+    connect(clearConfigButton, &QPushButton::clicked,
+            this, &SettingsDialog::onClearConfigurationClicked);
+    clearRow->addWidget(clearConfigButton);
+    auto *clearConversationsButton = new QPushButton("Clear Conversations");
+    clearConversationsButton->setObjectName("dangerButton");
+    connect(clearConversationsButton, &QPushButton::clicked,
+            this, &SettingsDialog::onClearConversationsClicked);
+    clearRow->addWidget(clearConversationsButton);
+    auto *clearAllButton = new QPushButton("Clear All");
+    clearAllButton->setObjectName("dangerButton");
+    connect(clearAllButton, &QPushButton::clicked,
+            this, &SettingsDialog::onClearAllClicked);
+    clearRow->addWidget(clearAllButton);
+    clearLayout->addLayout(clearRow);
+
+    dataPageLayout->addWidget(clearGroup);
+    dataPageLayout->addStretch();
 
     // --- Offload model — deliberately OUTSIDE the tab widget ---------------
     // Kept visible regardless of which tab is selected, rather than tucked
@@ -1576,4 +1694,142 @@ void SettingsDialog::onRepeatPenaltyChanged(double value)
 void SettingsDialog::onStopSequencesEdited()
 {
     QSettings().setValue("chat/stopSequences", m_stopSequencesEdit->text().trimmed());
+}
+
+void SettingsDialog::onOpenConversationsFolderClicked()
+{
+    QDesktopServices::openUrl(QUrl::fromLocalFile(m_conversationStore->conversationsDirPath()));
+}
+
+void SettingsDialog::onOpenSettingsFolderClicked()
+{
+    QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(QSettings().fileName()).absolutePath()));
+}
+
+void SettingsDialog::onExportAllConversationsClicked()
+{
+    const QString defaultPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+        + "/LinOllama-conversations.json";
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export all conversations", defaultPath, "JSON files (*.json)");
+    if (path.isEmpty())
+        return;
+
+    if (!m_conversationStore->exportAll(path))
+        QMessageBox::warning(this, "Export failed", "Couldn't write to \"" + path + "\".");
+}
+
+void SettingsDialog::onImportConversationsClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Import conversations", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        "JSON files (*.json);;All files (*)");
+    if (path.isEmpty())
+        return;
+
+    const int count = m_conversationStore->importAll(path);
+    if (count < 0) {
+        QMessageBox::warning(this, "Import failed",
+            "\"" + path + "\" doesn't look like a LinOllama conversations export.");
+    } else {
+        QMessageBox::information(this, "Import conversations",
+            QString("Imported %1 conversation(s).").arg(count));
+    }
+}
+
+void SettingsDialog::onExportSettingsClicked()
+{
+    const QString sourcePath = QSettings().fileName();
+    const QString defaultPath = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+        + "/LinOllama-settings.conf";
+    const QString path = QFileDialog::getSaveFileName(
+        this, "Export settings", defaultPath, "Settings files (*.conf);;All files (*)");
+    if (path.isEmpty())
+        return;
+
+    QFile::remove(path); // QFile::copy() refuses to overwrite an existing file
+    if (!QFile::copy(sourcePath, path))
+        QMessageBox::warning(this, "Export failed", "Couldn't write to \"" + path + "\".");
+}
+
+void SettingsDialog::onImportSettingsClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Import settings", QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation),
+        "Settings files (*.conf);;All files (*)");
+    if (path.isEmpty())
+        return;
+
+    if (QMessageBox::question(this, "Import settings",
+            "This replaces every current setting with the ones from \"" + path + "\". "
+            "Restart LinOllama afterward for everything to take effect. Continue?")
+        != QMessageBox::Yes)
+        return;
+
+    const QString destPath = QSettings().fileName();
+    QFile::remove(destPath);
+    if (!QFile::copy(path, destPath)) {
+        QMessageBox::warning(this, "Import failed", "Couldn't read \"" + path + "\".");
+        return;
+    }
+
+    QMessageBox::information(this, "Import settings",
+        "Settings imported. Restart LinOllama for all changes to take effect.");
+}
+
+bool SettingsDialog::confirmDestructive(const QString &title, const QString &text,
+                                         const QString &informativeText, const QString &confirmLabel)
+{
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(title);
+    box.setText(text);
+    box.setInformativeText(informativeText);
+
+    QPushButton *cancelButton = box.addButton(QMessageBox::Cancel);
+    QPushButton *confirmButton = box.addButton(confirmLabel, QMessageBox::DestructiveRole);
+    confirmButton->setObjectName("dangerButton"); // red styling comes from the app stylesheet
+    box.setDefaultButton(cancelButton);
+
+    box.exec();
+    return box.clickedButton() == confirmButton;
+}
+
+void SettingsDialog::onClearConfigurationClicked()
+{
+    if (!confirmDestructive("Clear configuration",
+            "Reset all settings to their defaults?",
+            "This can't be undone. Conversations aren't affected. Restart LinOllama afterward for "
+            "everything to take effect.",
+            "Clear Configuration"))
+        return;
+
+    QSettings settings;
+    settings.clear();
+    settings.sync();
+}
+
+void SettingsDialog::onClearConversationsClicked()
+{
+    if (!confirmDestructive("Clear conversations",
+            "Delete every conversation?",
+            "This can't be undone. Settings aren't affected.",
+            "Clear Conversations"))
+        return;
+
+    m_conversationStore->clearAll();
+}
+
+void SettingsDialog::onClearAllClicked()
+{
+    if (!confirmDestructive("Clear all data",
+            "Delete every conversation and reset all settings to their defaults?",
+            "This can't be undone. Restart LinOllama afterward for everything to take effect.",
+            "Clear All"))
+        return;
+
+    m_conversationStore->clearAll();
+    QSettings settings;
+    settings.clear();
+    settings.sync();
 }
