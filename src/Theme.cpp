@@ -516,7 +516,7 @@ QSlider#meterSmoothingSlider::handle:horizontal {
 
 QPushButton#editSaveButton {
     background-color: {{accent}};
-    color: #FFFFFF;
+    color: {{onAccent}};
     border: none;
 }
 
@@ -624,7 +624,7 @@ QPushButton#sendButton[planeStyle="true"] {
    used throughout this file (e.g. #inputCard[focused="true"]). */
 QPushButton#sendButton[filled="true"] {
     background-color: {{accent}};
-    color: #FFFFFF;
+    color: {{onAccent}};
     border-radius: 10px;
     padding: 8px 18px;
 }
@@ -635,7 +635,7 @@ QPushButton#sendButton[filled="true"]:hover {
 
 QPushButton#sendButton[filled="true"]:disabled {
     background-color: {{accentDisabledBg}};
-    color: #FFFFFF;
+    color: {{onAccent}};
 }
 
 QPushButton#sendButton[filled="true"][arrowStyle="true"] {
@@ -755,29 +755,53 @@ const QHash<QString, QString> &tokenTable(bool dark)
     return dark ? darkTokens : lightTokens;
 }
 
+// Shared by both the adaptive-gray and fixed-custom-hex branches of
+// styleSheet() below, and kept private to this file — blending toward a
+// target color (rather than just adjusting lightness) is what keeps a
+// "disabled"/hover look plausible regardless of the picked hue, including at
+// the near-black/near-white extremes lighter()/darker() would just clip at.
+QColor blendColor(const QColor &a, const QColor &b, double t)
+{
+    return QColor(int(a.red() * (1 - t) + b.red() * t),
+                  int(a.green() * (1 - t) + b.green() * t),
+                  int(a.blue() * (1 - t) + b.blue() * t));
+}
+
 } // namespace
+
+QString Theme::adaptiveAccentSentinel()
+{
+    return QStringLiteral("__adaptive_gray__");
+}
 
 QString Theme::styleSheet(bool dark)
 {
     QHash<QString, QString> tokens = tokenTable(dark); // copy — the custom-accent substitution below is per-call, not baked into the shared table
 
     const QString customAccent = QSettings().value("appearance/accentColor").toString();
-    if (!customAccent.isEmpty()) {
+    const QColor surface(tokens.value("surface"));
+
+    if (customAccent == adaptiveAccentSentinel()) {
+        // "Contrast": near-black accent in the light theme, near-white in the
+        // dark theme — reusing each theme's own "text" token, which is
+        // already exactly that. Hover/disabled are nudged toward the
+        // surface color rather than lighter()/darker(), since those would
+        // just clip at pure black/white and produce no visible change.
+        const QColor accent(tokens.value("text"));
+        tokens["accent"] = accent.name();
+        tokens["accentHover"] = blendColor(accent, surface, 0.15).name();
+        tokens["accentDisabledBg"] = blendColor(accent, surface, 0.6).name();
+    } else if (!customAccent.isEmpty()) {
         const QColor accent(customAccent);
         tokens["accent"] = accent.name();
         tokens["accentHover"] = (dark ? accent.lighter(115) : accent.darker(115)).name();
-
-        // Blended toward the theme's own surface color (rather than just
-        // adjusted lightness) so the muted "disabled" look stays plausible
-        // regardless of the picked hue.
-        const QColor surface(tokens.value("surface"));
-        auto blend = [](const QColor &a, const QColor &b, double t) {
-            return QColor(int(a.red() * (1 - t) + b.red() * t),
-                          int(a.green() * (1 - t) + b.green() * t),
-                          int(a.blue() * (1 - t) + b.blue() * t));
-        };
-        tokens["accentDisabledBg"] = blend(accent, surface, 0.6).name();
+        tokens["accentDisabledBg"] = blendColor(accent, surface, 0.6).name();
     }
+
+    // Equal to the static table default ("#FFFFFF") in every case except the
+    // one this introduces (adaptive-gray in the dark theme, where the accent
+    // itself just became near-white) — see currentOnAccentColor()'s own doc.
+    tokens["onAccent"] = Theme::currentOnAccentColor(dark);
 
     return applyTokens(templateQss(), tokens);
 }
@@ -794,13 +818,35 @@ QString Theme::colorToken(const QString &tokenName, bool dark)
     // custom Application color and always show the theme's built-in default.
     if (tokenName == QLatin1String("accent"))
         return currentAccentColor(dark);
+    // Same reasoning as "accent" above: loadThemedIcon() (e.g. the send/stop
+    // icon in filled-send-button mode — see ChatWidget.cpp) needs the
+    // effective on-accent color, which styleSheet() computes dynamically
+    // rather than baking into the static table.
+    if (tokenName == QLatin1String("onAccent"))
+        return currentOnAccentColor(dark);
     return tokenTable(dark).value(tokenName);
 }
 
 QString Theme::currentAccentColor(bool dark)
 {
     const QString stored = QSettings().value("appearance/accentColor").toString();
+    if (stored == adaptiveAccentSentinel())
+        return tokenTable(dark).value("text");
     return stored.isEmpty() ? tokenTable(dark).value("accent") : stored;
+}
+
+QString Theme::currentOnAccentColor(bool dark)
+{
+    // Only the adaptive-gray accent in the dark theme needs to differ from
+    // the static default: there, "accent" itself just became near-white (see
+    // styleSheet()), so white text/icons on top of it would be unreadable —
+    // every other case (built-in default, a fixed custom hex, adaptive-gray
+    // in the *light* theme where "accent" is near-black) is already
+    // legible against a plain white foreground.
+    const QString stored = QSettings().value("appearance/accentColor").toString();
+    if (dark && stored == adaptiveAccentSentinel())
+        return tokenTable(/*dark=*/false).value("text");
+    return tokenTable(dark).value("onAccent");
 }
 
 QIcon Theme::loadThemedIcon(const QString &resourcePath, bool dark, int sizePx, const QString &colorTokenName)

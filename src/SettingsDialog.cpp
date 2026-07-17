@@ -35,6 +35,9 @@
 #include <QIcon>
 #include <QPainter>
 #include <QLinearGradient>
+#include <QPolygon>
+#include <QPen>
+#include <QStringList>
 #include <iterator>
 #include <QMessageBox>
 #include <QDesktopServices>
@@ -85,6 +88,85 @@ const char *kRainbowColors[] = {
     "#2fa968", // vram — green
     "#3b82f6", // mic — blue
 };
+
+// Color-harmony presets: like Rainbow, each of kThemedColorKeys gets its own
+// hue, but algorithmically derived from the *current* accent's hue (see
+// onThemeColorPresetChanged()) via a standard hue-rotation offset list,
+// rather than one fixed hardcoded table. A scheme with fewer than 6 offsets
+// (every one of these) cycles — offsets[i % offsetCount] — to fill all 6
+// slots, per index order [accent, cpu, ram, gpu, vram, mic].
+struct HarmonyScheme {
+    const char *name;
+    const char *dataKey;
+    int offsets[5];
+    int offsetCount;
+};
+const HarmonyScheme kHarmonySchemes[] = {
+    {"Analogous",            "__harmony_analogous__",   {0, 30, 60, -30, -60}, 5},
+    {"Complementary",        "__harmony_complement__",  {0, 180},              2},
+    {"Split-Complementary",  "__harmony_split__",       {0, 150, 210},         3},
+    {"Triadic",              "__harmony_triadic__",     {0, 120, 240},         3},
+    {"Tetradic",             "__harmony_tetradic__",    {0, 60, 180, 240},     4},
+    {"Square",               "__harmony_square__",      {0, 90, 180, 270},     4},
+};
+
+// Fixed vividness for every harmony-generated color, so results stay
+// consistently readable regardless of how saturated/light the seed accent
+// happens to be (QColor::fromHsl's s/l are 0–255, not 0–100).
+constexpr int kHarmonySaturation = 170;
+constexpr int kHarmonyLightness = 140;
+// Used when the current accent can't meaningfully carry a hue (e.g.
+// unset/default, or the adaptive-gray "Contrast" preset, which is desaturated
+// by design) — a warm coral-ish hue in the same spirit as the app's own
+// default accent, so a harmony picked right after "Contrast" still produces 6
+// distinct colors instead of 6 identical grays.
+constexpr int kHarmonyFallbackHue = 15;
+
+// Where onThemeColorPresetChanged() remembers which harmony was last applied
+// and exactly what it produced, so refreshThemeColorCombo() can show that
+// scheme's name again instead of falling back to "Custom…" — see the
+// harmony-application loop's own comment for why a snapshot is needed here
+// (unlike Rainbow, which just re-checks its own fixed table).
+const char *kLastHarmonyKeyKey = "appearance/lastHarmonyKey";
+const char *kLastHarmonyColorsKey = "appearance/lastHarmonyColorsSnapshot";
+
+// Builds a small swatch icon from a handful of color stops (a left-to-right
+// gradient) — shared by "Rainbow" and every harmony preset below instead of
+// duplicating the QPainter/QLinearGradient boilerplate once per entry.
+QIcon makeGradientSwatch(const QVector<QColor> &stops)
+{
+    QPixmap swatch(16, 16);
+    QPainter painter(&swatch);
+    QLinearGradient gradient(0, 0, 16, 0);
+    const int n = stops.size();
+    for (int i = 0; i < n; ++i)
+        gradient.setColorAt(n > 1 ? double(i) / (n - 1) : 0.0, stops[i]);
+    painter.fillRect(swatch.rect(), gradient);
+    painter.end();
+    return QIcon(swatch);
+}
+
+// "Contrast" (adaptive grayscale accent — see Theme::adaptiveAccentSentinel())
+// gets its own swatch style rather than makeGradientSwatch(): a hard
+// diagonal black/white split with a thin border, since a plain white square
+// would disappear against the combo's own background.
+QIcon makeAdaptiveSwatch()
+{
+    QPixmap swatch(16, 16);
+    swatch.fill(Qt::transparent);
+    QPainter painter(&swatch);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor("#1E1D1B"));
+    painter.drawRect(swatch.rect());
+    painter.setBrush(QColor("#FFFFFF"));
+    const QPolygon triangle({QPoint(16, 0), QPoint(16, 16), QPoint(0, 16)});
+    painter.drawPolygon(triangle);
+    painter.setPen(QPen(QColor("#8A8578"), 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(swatch.rect().adjusted(0, 0, -1, -1));
+    painter.end();
+    return QIcon(swatch);
+}
 }
 
 SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
@@ -211,20 +293,32 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         swatch.fill(QColor(preset.hex));
         m_themeColorCombo->addItem(QIcon(swatch), preset.name, QString(preset.hex));
     }
+    // "Contrast" — adaptive grayscale (near-black in Light, near-white in
+    // Dark; see Theme::adaptiveAccentSentinel()), rather than a fixed hex
+    // like the presets above, since a literal white accent would vanish
+    // against the light theme's own near-white surfaces.
+    m_themeColorCombo->addItem(makeAdaptiveSwatch(), "Contrast", Theme::adaptiveAccentSentinel());
+    // Color-harmony presets: each derives its hues from the current accent
+    // (see onThemeColorPresetChanged()) rather than a fixed table, so the
+    // swatch here is just illustrative (a representative seed hue), not
+    // exactly what applying it will produce.
+    for (const HarmonyScheme &scheme : kHarmonySchemes) {
+        QVector<QColor> preview;
+        for (int i = 0; i < scheme.offsetCount; ++i) {
+            const int hue = ((160 + scheme.offsets[i]) % 360 + 360) % 360;
+            preview.append(QColor::fromHsl(hue, kHarmonySaturation, kHarmonyLightness));
+        }
+        m_themeColorCombo->addItem(makeGradientSwatch(preview), scheme.name, QString(scheme.dataKey));
+    }
     {
         // A gradient swatch across all six kRainbowColors, rather than a
         // solid fill like the presets above — visually signals up front
         // that this one behaves differently (colors *everything*
         // differently, not everything the same).
-        QPixmap rainbowSwatch(16, 16);
-        QPainter painter(&rainbowSwatch);
-        QLinearGradient gradient(0, 0, 16, 0);
-        const int stops = static_cast<int>(std::size(kRainbowColors));
-        for (int i = 0; i < stops; ++i)
-            gradient.setColorAt(double(i) / (stops - 1), QColor(kRainbowColors[i]));
-        painter.fillRect(rainbowSwatch.rect(), gradient);
-        painter.end();
-        m_themeColorCombo->addItem(QIcon(rainbowSwatch), "Rainbow", QStringLiteral("__rainbow__"));
+        QVector<QColor> rainbowStops;
+        for (const char *hex : kRainbowColors)
+            rainbowStops.append(QColor(hex));
+        m_themeColorCombo->addItem(makeGradientSwatch(rainbowStops), "Rainbow", QStringLiteral("__rainbow__"));
     }
     m_themeColorCombo->addItem(QStringLiteral("Custom…"), QStringLiteral("__custom__"));
     connect(m_themeColorCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -887,6 +981,39 @@ void SettingsDialog::onThemeColorPresetChanged(int index)
 {
     const QString data = m_themeColorCombo->itemData(index).toString();
 
+    for (const HarmonyScheme &scheme : kHarmonySchemes) {
+        if (data != QLatin1String(scheme.dataKey))
+            continue;
+
+        // Seed hue comes from whatever accent is in effect right now — if it
+        // can't meaningfully carry a hue (unset/default, or the desaturated
+        // adaptive-gray "Contrast" preset), fall back to a fixed hue so this
+        // still produces 6 distinct colors instead of 6 identical grays.
+        const bool dark = m_themeManager->isDarkActive();
+        const QColor seed(Theme::currentAccentColor(dark));
+        const int seedHue = seed.hslSaturationF() > 0.15 ? seed.hslHue() : kHarmonyFallbackHue;
+
+        // Harmonies (unlike Rainbow) have no fixed color table to re-detect
+        // against later — they're derived from whatever the seed hue was at
+        // pick time. So refreshThemeColorCombo() can't recompute "is this
+        // still Triadic?" from the hues alone; instead we snapshot exactly
+        // what got written here and compare that snapshot verbatim next
+        // time, which self-invalidates the moment any one of the 6 colors is
+        // hand-edited afterward (see kLastHarmonyColorsKey's own comment).
+        QStringList appliedColors;
+        for (int i = 0; i < kThemedColorKeys.size(); ++i) {
+            const int offset = scheme.offsets[i % scheme.offsetCount];
+            const int hue = ((seedHue + offset) % 360 + 360) % 360;
+            const QString hex = QColor::fromHsl(hue, kHarmonySaturation, kHarmonyLightness).name();
+            QSettings().setValue(kThemedColorKeys[i].live, hex);
+            appliedColors << hex;
+        }
+        QSettings().setValue(kLastHarmonyKeyKey, QString(scheme.dataKey));
+        QSettings().setValue(kLastHarmonyColorsKey, appliedColors.join(QLatin1Char('|')));
+        notifyColorChanged("appearance/accentColor");
+        return;
+    }
+
     if (data == QLatin1String("__rainbow__")) {
         // Unlike every other choice here, this sets each of the six colors
         // to its own distinct value rather than one color applied
@@ -972,12 +1099,29 @@ void SettingsDialog::refreshThemeColorCombo()
         }
     }
 
+    // A stored harmony "survives" only if every one of the 6 colors still
+    // exactly matches what was written when it was applied — the moment any
+    // one of them is hand-edited afterward, this naturally stops matching
+    // and falls through to "Custom…" below, same as it would for Rainbow.
+    bool isStoredHarmony = false;
+    const QString lastHarmonyKey = settings.value(kLastHarmonyKeyKey).toString();
+    if (!lastHarmonyKey.isEmpty()) {
+        QStringList currentColors;
+        for (int i = 0; i < kThemedColorKeys.size(); ++i)
+            currentColors << settings.value(kThemedColorKeys[i].live).toString().toLower();
+        isStoredHarmony = currentColors.join(QLatin1Char('|')) == settings.value(kLastHarmonyColorsKey).toString();
+    }
+
     int matchIndex = m_themeColorCombo->count() - 1; // falls back to "Custom…", the last entry
 
     if (isRainbow) {
         const int rainbowIndex = m_themeColorCombo->findData(QStringLiteral("__rainbow__"));
         if (rainbowIndex >= 0)
             matchIndex = rainbowIndex;
+    } else if (isStoredHarmony) {
+        const int harmonyIndex = m_themeColorCombo->findData(lastHarmonyKey);
+        if (harmonyIndex >= 0)
+            matchIndex = harmonyIndex;
     } else {
         const QString accent = settings.value("appearance/accentColor").toString().toLower();
 
@@ -1062,10 +1206,18 @@ void SettingsDialog::onModelOptimizationToggled(bool enabled)
 QString SettingsDialog::currentColorHex(const QString &settingsKey) const
 {
     const QString stored = QSettings().value(settingsKey).toString();
+    const bool dark = m_themeManager->isDarkActive();
+
+    // The adaptive-gray "Contrast" sentinel (see Theme::adaptiveAccentSentinel())
+    // isn't a real hex value — resolve it to the color it actually renders as,
+    // otherwise this swatch would show an invalid "background-color:
+    // __adaptive_gray__" instead of the near-black/near-white it means.
+    if (stored == Theme::adaptiveAccentSentinel())
+        return Theme::currentAccentColor(dark);
+
     if (!stored.isEmpty())
         return stored;
 
-    const bool dark = m_themeManager->isDarkActive();
     // The Application picker itself falls back to the theme's hardcoded
     // default (not currentAccentColor(), which would just reference its own
     // still-unset value) — every other color falls back to the *effective*

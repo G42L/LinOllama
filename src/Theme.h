@@ -38,6 +38,23 @@ QString colorToken(const QString &tokenName, bool dark);
 // colorToken("accent", dark), so it follows a custom accent too.
 QString currentAccentColor(bool dark);
 
+// The magic string SettingsDialog stores in "appearance/accentColor" to mean
+// "adaptive grayscale" (the Theme color combo's "Contrast" entry) rather than a
+// literal color: near-black in the light theme, near-white in the dark theme
+// (reusing each theme's own "text" token), since a single fixed hex can't be
+// legible as a foreground/border color against both a near-white and a dark
+// surface at once. Exposed here so SettingsDialog never hardcodes the literal.
+QString adaptiveAccentSentinel();
+
+// The foreground color to use on top of a filled accent-colored surface
+// (button text/icons — see editSaveButton, sendButton[filled] in Theme.cpp's
+// templateQss(), and the send/stop icon recoloring in ChatWidget.cpp). Equal
+// to the theme's static "#FFFFFF" default in every case except one: the
+// adaptive-gray accent (see adaptiveAccentSentinel()) in the dark theme,
+// where the accent itself is near-white and white-on-white would be
+// unreadable, so this returns a dark color instead.
+QString currentOnAccentColor(bool dark);
+
 // Loads an SVG icon resource (e.g. ":/icons/microphone.svg") that contains
 // a literal "{{iconColor}}" placeholder in its stroke/fill, substitutes in
 // the given theme's color token, and rasterizes it at sizePx — Qt's SVG
