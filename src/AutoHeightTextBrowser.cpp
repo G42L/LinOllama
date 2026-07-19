@@ -6,6 +6,9 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QImage>
+#include <QVector>
+#include <QPair>
+#include <QHash>
 
 namespace {
 
@@ -94,6 +97,172 @@ bool extractHtmlBlocks(const QString &content, QString *htmlOut)
     return true;
 }
 
+// LLMs (this Ollama models especially) frequently emit inline LaTeX math
+// (`$\rightarrow$`, `\(\alpha\)`, bare `\times` etc.) even when not asked to.
+// Qt's QTextDocument::setMarkdown() has no concept of LaTeX, so those
+// sequences would otherwise show up completely literally in the chat
+// bubble. This strips math delimiters and swaps the common LaTeX macros for
+// their Unicode equivalent so the reply reads as plain text/Markdown.
+QString sanitizeMathSegment(QString segment)
+{
+    // Math delimiters: keep the contents, drop the wrapper.
+    static const QRegularExpression blockDollar(
+        QStringLiteral("\\$\\$(.*?)\\$\\$"), QRegularExpression::DotMatchesEverythingOption);
+    segment.replace(blockDollar, QStringLiteral("\\1"));
+    static const QRegularExpression blockBracket(
+        QStringLiteral("\\\\\\[(.*?)\\\\\\]"), QRegularExpression::DotMatchesEverythingOption);
+    segment.replace(blockBracket, QStringLiteral("\\1"));
+    static const QRegularExpression inlineParen(
+        QStringLiteral("\\\\\\((.*?)\\\\\\)"), QRegularExpression::DotMatchesEverythingOption);
+    segment.replace(inlineParen, QStringLiteral("\\1"));
+    static const QRegularExpression inlineDollar(QStringLiteral("\\$([^$\\n]+?)\\$"));
+    segment.replace(inlineDollar, QStringLiteral("\\1"));
+
+    // LaTeX macro -> Unicode. Matched with a "not followed by a letter"
+    // lookahead so e.g. "\le" doesn't fire inside "\leq".
+    static const QVector<QPair<QString, QString>> macros = {
+        {QStringLiteral("rightarrow"), QString::fromUtf8("\xe2\x86\x92")},   // →
+        {QStringLiteral("Rightarrow"), QString::fromUtf8("\xe2\x87\x92")},   // ⇒
+        {QStringLiteral("longrightarrow"), QString::fromUtf8("\xe2\x86\x92")},
+        {QStringLiteral("leftarrow"), QString::fromUtf8("\xe2\x86\x90")},    // ←
+        {QStringLiteral("Leftarrow"), QString::fromUtf8("\xe2\x87\x90")},    // ⇐
+        {QStringLiteral("longleftarrow"), QString::fromUtf8("\xe2\x86\x90")},
+        {QStringLiteral("leftrightarrow"), QString::fromUtf8("\xe2\x86\x94")}, // ↔
+        {QStringLiteral("Leftrightarrow"), QString::fromUtf8("\xe2\x87\x94")}, // ⇔
+        {QStringLiteral("mapsto"), QString::fromUtf8("\xe2\x86\xa6")},       // ↦
+        {QStringLiteral("to"), QString::fromUtf8("\xe2\x86\x92")},          // →
+        {QStringLiteral("times"), QString::fromUtf8("\xc3\x97")},          // ×
+        {QStringLiteral("div"), QString::fromUtf8("\xc3\xb7")},            // ÷
+        {QStringLiteral("cdot"), QString::fromUtf8("\xc2\xb7")},           // ·
+        {QStringLiteral("pm"), QString::fromUtf8("\xc2\xb1")},             // ±
+        {QStringLiteral("mp"), QString::fromUtf8("\xe2\x88\x93")},         // ∓
+        {QStringLiteral("infty"), QString::fromUtf8("\xe2\x88\x9e")},      // ∞
+        {QStringLiteral("approx"), QString::fromUtf8("\xe2\x89\x88")},     // ≈
+        {QStringLiteral("simeq"), QString::fromUtf8("\xe2\x89\x83")},      // ≃
+        {QStringLiteral("equiv"), QString::fromUtf8("\xe2\x89\xa1")},      // ≡
+        {QStringLiteral("neq"), QString::fromUtf8("\xe2\x89\xa0")},        // ≠
+        {QStringLiteral("leq"), QString::fromUtf8("\xe2\x89\xa4")},        // ≤
+        {QStringLiteral("le"), QString::fromUtf8("\xe2\x89\xa4")},         // ≤
+        {QStringLiteral("geq"), QString::fromUtf8("\xe2\x89\xa5")},        // ≥
+        {QStringLiteral("ge"), QString::fromUtf8("\xe2\x89\xa5")},         // ≥
+        {QStringLiteral("ll"), QString::fromUtf8("\xe2\x89\xaa")},         // ≪
+        {QStringLiteral("gg"), QString::fromUtf8("\xe2\x89\xab")},         // ≫
+        {QStringLiteral("propto"), QString::fromUtf8("\xe2\x88\x9d")},     // ∝
+        {QStringLiteral("sum"), QString::fromUtf8("\xe2\x88\x91")},        // ∑
+        {QStringLiteral("prod"), QString::fromUtf8("\xe2\x88\x8f")},       // ∏
+        {QStringLiteral("int"), QString::fromUtf8("\xe2\x88\xab")},        // ∫
+        {QStringLiteral("oint"), QString::fromUtf8("\xe2\x88\xae")},       // ∮
+        {QStringLiteral("partial"), QString::fromUtf8("\xe2\x88\x82")},    // ∂
+        {QStringLiteral("nabla"), QString::fromUtf8("\xe2\x88\x87")},      // ∇
+        {QStringLiteral("forall"), QString::fromUtf8("\xe2\x88\x80")},     // ∀
+        {QStringLiteral("exists"), QString::fromUtf8("\xe2\x88\x83")},     // ∃
+        {QStringLiteral("nexists"), QString::fromUtf8("\xe2\x88\x84")},    // ∄
+        {QStringLiteral("in"), QString::fromUtf8("\xe2\x88\x88")},         // ∈
+        {QStringLiteral("notin"), QString::fromUtf8("\xe2\x88\x89")},      // ∉
+        {QStringLiteral("subseteq"), QString::fromUtf8("\xe2\x8a\x86")},   // ⊆
+        {QStringLiteral("subset"), QString::fromUtf8("\xe2\x8a\x82")},     // ⊂
+        {QStringLiteral("supseteq"), QString::fromUtf8("\xe2\x8a\x87")},   // ⊇
+        {QStringLiteral("supset"), QString::fromUtf8("\xe2\x8a\x83")},     // ⊃
+        {QStringLiteral("cup"), QString::fromUtf8("\xe2\x88\xaa")},        // ∪
+        {QStringLiteral("cap"), QString::fromUtf8("\xe2\x88\xa9")},        // ∩
+        {QStringLiteral("setminus"), QString::fromUtf8("\xe2\x88\x96")},   // ∖
+        {QStringLiteral("emptyset"), QString::fromUtf8("\xe2\x88\x85")},   // ∅
+        {QStringLiteral("varnothing"), QString::fromUtf8("\xe2\x88\x85")}, // ∅
+        {QStringLiteral("wedge"), QString::fromUtf8("\xe2\x88\xa7")},      // ∧
+        {QStringLiteral("vee"), QString::fromUtf8("\xe2\x88\xa8")},        // ∨
+        {QStringLiteral("neg"), QString::fromUtf8("\xc2\xac")},            // ¬
+        {QStringLiteral("oplus"), QString::fromUtf8("\xe2\x8a\x95")},      // ⊕
+        {QStringLiteral("otimes"), QString::fromUtf8("\xe2\x8a\x97")},     // ⊗
+        {QStringLiteral("perp"), QString::fromUtf8("\xe2\x8a\xa5")},       // ⊥
+        {QStringLiteral("parallel"), QString::fromUtf8("\xe2\x88\xa5")},   // ∥
+        {QStringLiteral("angle"), QString::fromUtf8("\xe2\x88\xa0")},      // ∠
+        {QStringLiteral("therefore"), QString::fromUtf8("\xe2\x88\xb4")},  // ∴
+        {QStringLiteral("because"), QString::fromUtf8("\xe2\x88\xb5")},    // ∵
+        {QStringLiteral("sim"), QString::fromUtf8("\xe2\x88\xbc")},        // ∼
+        {QStringLiteral("ldots"), QString::fromUtf8("\xe2\x80\xa6")},      // …
+        {QStringLiteral("cdots"), QString::fromUtf8("\xe2\x8b\xaf")},      // ⋯
+        {QStringLiteral("vdots"), QString::fromUtf8("\xe2\x8b\xae")},      // ⋮
+        {QStringLiteral("ddots"), QString::fromUtf8("\xe2\x8b\xb1")},      // ⋱
+        {QStringLiteral("hbar"), QString::fromUtf8("\xe2\x84\x8f")},       // ℏ
+        {QStringLiteral("ell"), QString::fromUtf8("\xe2\x84\x93")},        // ℓ
+        {QStringLiteral("prime"), QString::fromUtf8("\xe2\x80\xb2")},      // ′
+        {QStringLiteral("deg"), QString::fromUtf8("\xc2\xb0")},            // °
+        {QStringLiteral("circ"), QString::fromUtf8("\xc2\xb0")},           // °
+        {QStringLiteral("bullet"), QString::fromUtf8("\xe2\x80\xa2")},     // •
+        // Greek letters (lowercase)
+        {QStringLiteral("alpha"), QString::fromUtf8("\xce\xb1")},
+        {QStringLiteral("beta"), QString::fromUtf8("\xce\xb2")},
+        {QStringLiteral("gamma"), QString::fromUtf8("\xce\xb3")},
+        {QStringLiteral("delta"), QString::fromUtf8("\xce\xb4")},
+        {QStringLiteral("epsilon"), QString::fromUtf8("\xce\xb5")},
+        {QStringLiteral("varepsilon"), QString::fromUtf8("\xce\xb5")},
+        {QStringLiteral("zeta"), QString::fromUtf8("\xce\xb6")},
+        {QStringLiteral("eta"), QString::fromUtf8("\xce\xb7")},
+        {QStringLiteral("theta"), QString::fromUtf8("\xce\xb8")},
+        {QStringLiteral("iota"), QString::fromUtf8("\xce\xb9")},
+        {QStringLiteral("kappa"), QString::fromUtf8("\xce\xba")},
+        {QStringLiteral("lambda"), QString::fromUtf8("\xce\xbb")},
+        {QStringLiteral("mu"), QString::fromUtf8("\xce\xbc")},
+        {QStringLiteral("nu"), QString::fromUtf8("\xce\xbd")},
+        {QStringLiteral("xi"), QString::fromUtf8("\xce\xbe")},
+        {QStringLiteral("pi"), QString::fromUtf8("\xcf\x80")},
+        {QStringLiteral("rho"), QString::fromUtf8("\xcf\x81")},
+        {QStringLiteral("sigma"), QString::fromUtf8("\xcf\x83")},
+        {QStringLiteral("tau"), QString::fromUtf8("\xcf\x84")},
+        {QStringLiteral("upsilon"), QString::fromUtf8("\xcf\x85")},
+        {QStringLiteral("phi"), QString::fromUtf8("\xcf\x86")},
+        {QStringLiteral("varphi"), QString::fromUtf8("\xcf\x86")},
+        {QStringLiteral("chi"), QString::fromUtf8("\xcf\x87")},
+        {QStringLiteral("psi"), QString::fromUtf8("\xcf\x88")},
+        {QStringLiteral("omega"), QString::fromUtf8("\xcf\x89")},
+        // Greek letters (uppercase)
+        {QStringLiteral("Gamma"), QString::fromUtf8("\xce\x93")},
+        {QStringLiteral("Delta"), QString::fromUtf8("\xce\x94")},
+        {QStringLiteral("Theta"), QString::fromUtf8("\xce\x98")},
+        {QStringLiteral("Lambda"), QString::fromUtf8("\xce\x9b")},
+        {QStringLiteral("Xi"), QString::fromUtf8("\xce\x9e")},
+        {QStringLiteral("Pi"), QString::fromUtf8("\xce\xa0")},
+        {QStringLiteral("Sigma"), QString::fromUtf8("\xce\xa3")},
+        {QStringLiteral("Upsilon"), QString::fromUtf8("\xce\xa5")},
+        {QStringLiteral("Phi"), QString::fromUtf8("\xce\xa6")},
+        {QStringLiteral("Psi"), QString::fromUtf8("\xce\xa8")},
+        {QStringLiteral("Omega"), QString::fromUtf8("\xce\xa9")},
+    };
+
+    for (const auto &macro : macros) {
+        static QHash<QString, QRegularExpression> cache;
+        auto cacheIt = cache.find(macro.first);
+        if (cacheIt == cache.end())
+            cacheIt = cache.insert(macro.first, QRegularExpression(
+                QStringLiteral("\\\\%1(?![A-Za-z])").arg(macro.first)));
+        segment.replace(cacheIt.value(), macro.second);
+    }
+
+    return segment;
+}
+
+// Applies sanitizeMathSegment() everywhere except inside fenced/inline code,
+// so a reply that's actually showing LaTeX *source* as an example isn't
+// altered.
+QString sanitizeLatexMath(const QString &content)
+{
+    static const QRegularExpression codeSpan(
+        QStringLiteral("```.*?```|`[^`\\n]*`"),
+        QRegularExpression::DotMatchesEverythingOption);
+
+    QString result;
+    int lastEnd = 0;
+    QRegularExpressionMatchIterator it = codeSpan.globalMatch(content);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        result += sanitizeMathSegment(content.mid(lastEnd, match.capturedStart() - lastEnd));
+        result += match.captured(0);
+        lastEnd = match.capturedEnd();
+    }
+    result += sanitizeMathSegment(content.mid(lastEnd));
+    return result;
+}
+
 } // namespace
 
 AutoHeightTextBrowser::AutoHeightTextBrowser(QWidget *parent)
@@ -122,11 +291,13 @@ AutoHeightTextBrowser::AutoHeightTextBrowser(QWidget *parent)
 
 void AutoHeightTextBrowser::setMarkdownWithHtmlBlocks(const QString &content)
 {
+    const QString sanitized = sanitizeLatexMath(content);
+
     QString html;
-    if (extractHtmlBlocks(content, &html))
+    if (extractHtmlBlocks(sanitized, &html))
         setHtml(html);
     else
-        setMarkdown(content);
+        setMarkdown(sanitized);
 }
 
 bool AutoHeightTextBrowser::containsHtmlBlock(const QString &content)
