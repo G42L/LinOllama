@@ -117,6 +117,26 @@ QString sanitizeMathSegment(QString segment)
     segment.replace(inlineParen, QStringLiteral("\\1"));
     static const QRegularExpression inlineDollar(QStringLiteral("\\$([^$\\n]+?)\\$"));
     segment.replace(inlineDollar, QStringLiteral("\\1"));
+    
+    // Text-wrapping macros: \text{m}, \mathrm{kg}, etc. take a brace
+    // argument rather than standing alone, so they don't fit the bare
+    // macro table below — unwrap to just the argument (e.g. "m").
+    // Doesn't handle nested braces in the argument, which real usage here
+    // (units, short labels) never has.
+    static const QVector<QString> textWrappers = {
+        QStringLiteral("text"), QStringLiteral("mathrm"), QStringLiteral("mathit"),
+        QStringLiteral("mathbf"), QStringLiteral("textbf"), QStringLiteral("textit"),
+        QStringLiteral("textrm"), QStringLiteral("operatorname"),
+        QStringLiteral("mathsf"), QStringLiteral("mathtt"),
+    };
+    for (const QString &name : textWrappers) {
+        static QHash<QString, QRegularExpression> cache;
+        auto cacheIt = cache.find(name);
+        if (cacheIt == cache.end())
+            cacheIt = cache.insert(name, QRegularExpression(
+                QStringLiteral("\\\\%1\\{([^{}]*)\\}").arg(name)));
+        segment.replace(cacheIt.value(), QStringLiteral("\\1"));
+    }
 
     // LaTeX macro -> Unicode. Matched with a "not followed by a letter"
     // lookahead so e.g. "\le" doesn't fire inside "\leq".
