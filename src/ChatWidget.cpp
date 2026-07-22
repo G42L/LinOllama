@@ -661,14 +661,12 @@ void ChatWidget::renderConversation()
     };
     QVector<PendingToolCall> pendingToolCalls;
 
-    // Note: past "thinking" traces aren't persisted to disk (see
-    // Conversation.h / ChatMessage — there's no field for it), so reloading
-    // an old conversation shows only the final answers, with no thinking
-    // section above them. That's a deliberate scope call, not a bug: the
-    // trace is a live reasoning scratchpad, not part of the saved transcript.
-    // The in-progress stream's own thinking trace (if any) is still shown
-    // live via reconnectStreamingBubble(), which reads it from m_streams
-    // rather than from disk.
+    // Past "thinking" traces persisted to disk (ChatMessage::thinking — see
+    // Conversation.h and ConversationStore::setStreamingAssistantThinking())
+    // are reconstructed into a ThinkingSectionWidget below, in the loop
+    // itself. The in-progress stream's own thinking trace (if any) is a
+    // separate path, shown live via reconnectStreamingBubble(), which reads
+    // it from m_streams rather than from disk.
     for (int i = 0; i < conv->messages.size(); ++i) {
         if (i == liveMessageIndex) {
             reconnectStreamingBubble();
@@ -703,8 +701,30 @@ void ChatWidget::renderConversation()
         // pending tool-call run (e.g. the previous turn was stopped mid
         // tool execution) just silently drops it rather than attaching it
         // somewhere that wouldn't make sense.
-        if (msg.role == "assistant" && !pendingToolCalls.isEmpty() && bubbleLayout) {
+        if (msg.role == "assistant" && bubbleLayout) {
             int insertPos = 0;
+
+            // Same ordering as the live round-trip: thinking trace first
+            // (see onChatThinkingDelta()), then any tool-call sections,
+            // then the answer text (already the bubble's own last item).
+            // No original start/end timestamps were persisted alongside
+            // msg.thinking, so the header just reads "Thought briefly"
+            // rather than a real duration — this is a reconstruction from
+            // history, not a live trace, so there's no elapsed time to show.
+            if (!msg.thinking.isEmpty()) {
+                auto *thinkingWidget = new ThinkingSectionWidget;
+                // setThinking(false) alone would be a no-op here — it
+                // defaults to false already, and the setter only reacts to
+                // an actual change (see its own early-return) — so the
+                // true/false pair is what makes both transitions (spinner
+                // start, then stop+finalize m_endMs/header text) actually
+                // happen, not just the second one.
+                thinkingWidget->setThinking(true);
+                thinkingWidget->appendThinkingText(msg.thinking);
+                thinkingWidget->setThinking(false);
+                bubbleLayout->insertWidget(insertPos++, thinkingWidget);
+            }
+
             for (const PendingToolCall &call : pendingToolCalls) {
                 auto *widget = new ToolCallSectionWidget(call.name, call.arguments);
                 if (call.resolved)
@@ -1112,6 +1132,7 @@ void ChatWidget::abortActiveStreamIfAny()
     // than discarding a partial answer.
     if (m_streamingThinkingWidget)
         m_streamingThinkingWidget->setThinking(false);
+    m_store->setStreamingAssistantThinking(conversationId, m_streams.value(conversationId).thinkingBuffer);
     m_store->finalizeStreamingAssistantMessage(conversationId);
 
     m_streams.remove(conversationId);
@@ -1628,6 +1649,7 @@ void ChatWidget::onChatDone(const QString &conversationId)
         return;
     }
 
+    m_store->setStreamingAssistantThinking(conversationId, m_streams.value(conversationId).thinkingBuffer);
     m_store->finalizeStreamingAssistantMessage(conversationId);
 
     const StreamState st = m_streams.value(conversationId);

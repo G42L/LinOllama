@@ -78,6 +78,15 @@ public:
     // only; call finalizeStreamingAssistantMessage() once streaming ends.
     void updateStreamingAssistantMessage(const QString &conversationId, const QString &fullContentSoFar);
 
+    // Same in-memory-only pattern as updateStreamingAssistantMessage(), for
+    // the reasoning trace instead of the answer content — sets
+    // ChatMessage::thinking on the conversation's last assistant message, if
+    // any. Call once, with the full accumulated trace, right before
+    // finalizeStreamingAssistantMessage() so it's included in that persist —
+    // never mid-stream, since (unlike content) there's no need to show a
+    // live-updating value here, only a value that's there when it matters.
+    void setStreamingAssistantThinking(const QString &conversationId, const QString &thinking);
+
     // Persists the conversation to disk once streaming has finished —
     // call this after the last updateStreamingAssistantMessage() call.
     void finalizeStreamingAssistantMessage(const QString &conversationId);

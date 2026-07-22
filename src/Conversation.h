@@ -54,6 +54,15 @@ struct ChatMessage
     // to re-derive it from toolCalls[i].function.name at render time.
     QString toolName;
 
+    // The model's reasoning trace (Ollama's message.thinking field — see
+    // docs.ollama.com/capabilities/thinking) for an assistant message that
+    // had one, so a reloaded conversation can still show a "Thought for Ns"
+    // section above the answer instead of only the final content. Empty for
+    // messages from before this field existed, or from a model that doesn't
+    // support thinking — ChatWidget only shows the section at all when this
+    // is non-empty (see renderConversation()).
+    QString thinking;
+
     QJsonObject toJson() const
     {
         return QJsonObject{
@@ -65,7 +74,8 @@ struct ChatMessage
             {"imagesBase64", QJsonArray::fromStringList(imagesBase64)},
             {"webSearchContext", webSearchContext},
             {"toolCalls", toolCalls},
-            {"toolName", toolName}
+            {"toolName", toolName},
+            {"thinking", thinking}
         };
     }
 
@@ -83,6 +93,7 @@ struct ChatMessage
         m.webSearchContext = obj.value("webSearchContext").toString();
         m.toolCalls = obj.value("toolCalls").toArray();
         m.toolName = obj.value("toolName").toString();
+        m.thinking = obj.value("thinking").toString();
         return m;
     }
 };

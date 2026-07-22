@@ -158,6 +158,19 @@ void ConversationStore::updateStreamingAssistantMessage(const QString &conversat
     // content, or an explicit final persist() call.
 }
 
+void ConversationStore::setStreamingAssistantThinking(const QString &conversationId, const QString &thinking)
+{
+    if (thinking.isEmpty())
+        return; // nothing to set — leave the field at its default empty string
+    const int idx = indexOf(conversationId);
+    if (idx < 0)
+        return;
+
+    Conversation &c = m_conversations[idx];
+    if (!c.messages.isEmpty() && c.messages.last().role == "assistant")
+        c.messages.last().thinking = thinking;
+}
+
 void ConversationStore::finalizeStreamingAssistantMessage(const QString &conversationId)
 {
     const int idx = indexOf(conversationId);
