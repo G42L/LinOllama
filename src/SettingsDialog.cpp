@@ -29,6 +29,7 @@
 #include <QAudioDevice>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <QCoreApplication>
 #include <QTabWidget>
 #include <limits>
 #include <QScrollArea>
@@ -1503,6 +1504,15 @@ void SettingsDialog::clearLoadedModelsList()
         delete item;
     }
     m_loadedModelsStatusLabel = nullptr;
+
+    // refreshLoadedModels()/rebuildLoadedModelsList() add the new row(s) or
+    // status label immediately after calling this — deleteLater() above
+    // only *schedules* destruction, so without this flush, a previous row's
+    // "Offload" button (still alive, just no longer in the layout) would
+    // keep showing up alongside the new content until the event loop
+    // eventually got around to the deferred deletion — the same "ghost
+    // widget" bug ChatWidget::clearMessages() had for chat bubbles.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void SettingsDialog::rebuildLoadedModelsList(const QVector<LoadedModelInfo> &models)
@@ -1930,6 +1940,10 @@ void SettingsDialog::clearInstalledModelsList()
         delete item;
     }
     m_installedModelsStatusLabel = nullptr;
+
+    // Same reasoning as clearLoadedModelsList() — flush immediately so a
+    // previous row doesn't linger as a "ghost" widget alongside the new one.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void SettingsDialog::rebuildInstalledModelsList(const QStringList &modelNames)
