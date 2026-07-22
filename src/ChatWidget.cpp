@@ -897,10 +897,19 @@ AutoHeightTextBrowser *ChatWidget::appendMessageBubble(const QString &role, cons
         actionsLayout->addWidget(timestampLabel, /*stretch=*/1);
 
         const bool dark = m_themeManager && m_themeManager->isDarkActive();
+        // Scaled by "appearance/fontScale" (see Theme::scaledPixelSize()) —
+        // these buttons are rebuilt fresh on every renderConversation() call,
+        // which the font-size slider already triggers (see the
+        // ThemeManager::themeChanged -> refreshFormattingSettings()
+        // connection in the constructor), so reading the current scale here
+        // is all that's needed; no separate live-refresh path for these.
+        const int actionIconPx = Theme::scaledPixelSize(13);
+        const QSize actionIconSize(actionIconPx, actionIconPx);
 
         auto *editButton = new QToolButton;
         editButton->setObjectName("messageActionButton");
-        editButton->setIcon(Theme::loadThemedIcon(":/icons/edit.svg", dark, 13, "secondaryText"));
+        editButton->setIconSize(actionIconSize);
+        editButton->setIcon(Theme::loadThemedIcon(":/icons/edit.svg", dark, actionIconPx, "secondaryText"));
         editButton->setToolTip("Edit");
         editButton->setCursor(Qt::PointingHandCursor);
         editButton->setAutoRaise(true);
@@ -908,7 +917,8 @@ AutoHeightTextBrowser *ChatWidget::appendMessageBubble(const QString &role, cons
 
         auto *retryButton = new QToolButton;
         retryButton->setObjectName("messageActionButton");
-        retryButton->setIcon(Theme::loadThemedIcon(":/icons/retry.svg", dark, 13, "secondaryText"));
+        retryButton->setIconSize(actionIconSize);
+        retryButton->setIcon(Theme::loadThemedIcon(":/icons/retry.svg", dark, actionIconPx, "secondaryText"));
         retryButton->setToolTip("Retry");
         retryButton->setCursor(Qt::PointingHandCursor);
         retryButton->setAutoRaise(true);
