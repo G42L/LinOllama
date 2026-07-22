@@ -60,13 +60,19 @@ QProgressBar *StatsStripWidget::makeMeter(QWidget *, const QString &labelText, Q
     hbox->setContentsMargins(0, 0, 0, 0);
 
     auto *nameLabel = new QLabel(labelText);
-    nameLabel->setStyleSheet("font-size: 11px; opacity: 0.6;");
+    nameLabel->setObjectName("statMeterLabel");
     nameLabel->setWordWrap(true);
     hbox->addWidget(nameLabel);
     hbox->addStretch();
 
     auto *valueLabel = new QLabel("--");
-    valueLabel->setStyleSheet("font-size: 11px; opacity: 0.6;");
+    valueLabel->setObjectName("statMeterLabel");
+    // Without this, a value string that no longer fits on one line at a
+    // larger font-size scale (or in a narrow, user-dragged panel) was
+    // simply clipped on the right rather than wrapping — QLabel clips its
+    // own contents to its allotted rect by default.
+    valueLabel->setWordWrap(true);
+    valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     hbox->addWidget(valueLabel);
     *valueLabelOut = valueLabel;
 
@@ -131,7 +137,7 @@ void StatsStripWidget::onStatsUpdated(double cpuPercent,
 
         if (gpus.isEmpty()) {
             auto *noneLabel = new QLabel("No GPU detected");
-            noneLabel->setStyleSheet("font-size: 11px; opacity: 0.5;");
+            noneLabel->setObjectName("statNoGpuLabel");
             gpuLayout->addWidget(noneLabel);
         }
 

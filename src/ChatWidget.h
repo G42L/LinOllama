@@ -117,6 +117,18 @@ public:
     // when SettingsDialog's meter-smoothing slider changes.
     void refreshMeterSmoothing();
 
+    // Re-renders the active conversation from scratch — called live when
+    // any Formatting-tab slider changes (paragraph/list/heading spacing, or
+    // the whole-app font-size scale). Unlike the settings above, these
+    // don't have a single live "current value" to just re-apply: Qt bakes
+    // the resolved font size and block-format margins directly into each
+    // message's own QTextDocument content at the moment it's rendered (see
+    // AutoHeightTextBrowser::setMarkdownWithHtmlBlocks()), so a setting
+    // change alone doesn't retroactively touch anything already on screen —
+    // only calling renderConversation() again, which reconstructs every
+    // bubble from the stored message text, picks up the new values.
+    void refreshFormattingSettings();
+
 protected:
     // Watches two unrelated children, both for things QSS/layouts can't
     // express directly:

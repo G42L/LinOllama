@@ -42,6 +42,8 @@ add_executable(linollama
     src/ChatInputEdit.h
     src/AutoHeightTextBrowser.cpp
     src/AutoHeightTextBrowser.h
+    src/EmojiRenderer.cpp
+    src/EmojiRenderer.h
     src/ThinkingSectionWidget.cpp
     src/ThinkingSectionWidget.h
     src/ToolCallSectionWidget.cpp
@@ -63,6 +65,7 @@ add_executable(linollama
     src/MainWindow.cpp
     src/MainWindow.h
     src/resources.qrc
+    src/resources_emoji.qrc
 )
 
 target_link_libraries(linollama

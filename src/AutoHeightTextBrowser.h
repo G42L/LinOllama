@@ -5,6 +5,8 @@
 #include <QNetworkAccessManager>
 #include <QSet>
 
+class QMimeData;
+
 // A read-only QTextBrowser that resizes itself to exactly fit its content,
 // with no internal scrollbar and no height limit — used for chat message
 // bubbles, which live inside the outer message-list QScrollArea, so that's
@@ -42,6 +44,16 @@ public:
     // through HtmlEmbedWidget. MapEmbedWidget is the equivalent for ```map.
     void setMarkdownWithHtmlBlocks(const QString &content);
 
+    // Renders `content` literally — no Markdown interpretation — while still
+    // substituting recognized emoji characters for the bundled Noto Emoji
+    // images, the same as setMarkdownWithHtmlBlocks() does. Used for the
+    // user's own message bubble (and error text), which must show exactly
+    // what they typed but should still get colored emoji instead of tofu
+    // boxes. A plain setPlainText() can't embed images at all, so this
+    // HTML-escapes the text and renders it via setHtml() instead, wrapped in
+    // a pre-wrap block so whitespace/line breaks still look like plain text.
+    void setPlainTextWithEmoji(const QString &content);
+
     // True if `content` contains at least one ```html fenced block — used
     // by ChatWidget to decide whether a reply needs the raw/rendered toggle
     // button at all (plain Markdown replies never get one).
@@ -57,6 +69,14 @@ protected:
     // reruns automatically once the fetch completes and the resource is
     // cached, via markContentsDirty()).
     QVariant loadResource(int type, const QUrl &name) override;
+
+    // Copying an emoji <img> alone would otherwise paste as the Unicode
+    // object replacement character (￼) — it has no text behind it, just an
+    // image. This restores the original emoji character(s) in the plain-text
+    // clipboard flavor (the rendered/HTML flavor is untouched, so pasting
+    // into a rich-text target still shows the image) — see
+    // EmojiRenderer::emojiForResourcePath().
+    QMimeData *createMimeDataFromSelection() const override;
 
 private slots:
     void adjustHeight();

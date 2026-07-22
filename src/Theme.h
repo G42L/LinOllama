@@ -71,4 +71,12 @@ QIcon loadThemedIcon(const QString &resourcePath, bool dark, int sizePx = 16,
 // a single small pixmap stretched up to fill a big one would look blurry.
 QIcon loadThemedIconMultiSize(const QString &resourcePath, bool dark, const QVector<int> &sizesPx,
                                const QString &colorTokenName = QStringLiteral("secondaryText"));
+
+// Multiplies `basePx` by the current "appearance/fontScale" setting (see
+// applyFontScale() in Theme.cpp, which does the same for every QSS
+// font-size) — for toolbar icon sizes, which aren't part of the stylesheet
+// at all (QToolButton::setIconSize() and the pixel size baked into a
+// rasterized QIcon both have to be set directly in C++), so they'd
+// otherwise stay fixed regardless of the font-size slider.
+int scaledPixelSize(int basePx);
 }

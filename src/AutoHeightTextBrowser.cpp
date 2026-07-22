@@ -1,7 +1,12 @@
 #include "AutoHeightTextBrowser.h"
+#include "EmojiRenderer.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QTextDocument>
+#include <QTextBlock>
+#include <QTextCursor>
+#include <QTextFragment>
+#include <QTextBlockFormat>
 #include <QRegularExpression>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -9,6 +14,10 @@
 #include <QVector>
 #include <QPair>
 #include <QHash>
+#include <QMimeData>
+#include <QStringList>
+#include <QFontInfo>
+#include <QSettings>
 
 namespace {
 
@@ -62,7 +71,14 @@ const QRegularExpression &htmlFencePattern()
     return htmlFence;
 }
 
-bool extractHtmlBlocks(const QString &content, QString *htmlOut)
+// `font` is the destination widget's own (already-polished) font — each
+// throwaway QTextDocument used here to convert a Markdown segment to HTML
+// starts out with Qt's generic default font, not the browser's actual
+// themed one, and toHtml() bakes whatever font it has directly into the
+// exported HTML as inline styles. Without setting it explicitly, the
+// spliced-in segment would render at the wrong (generic) size once handed
+// back to the real browser's setHtml(), overriding its QSS font-size.
+bool extractHtmlBlocks(const QString &content, QString *htmlOut, const QFont &font)
 {
     const QRegularExpression &htmlFence = htmlFencePattern();
 
@@ -78,6 +94,7 @@ bool extractHtmlBlocks(const QString &content, QString *htmlOut)
         const QString before = content.mid(lastEnd, match.capturedStart() - lastEnd);
         if (!before.trimmed().isEmpty()) {
             QTextDocument doc;
+            doc.setDefaultFont(font);
             doc.setMarkdown(before);
             result += doc.toHtml();
         }
@@ -89,6 +106,7 @@ bool extractHtmlBlocks(const QString &content, QString *htmlOut)
     const QString after = content.mid(lastEnd);
     if (!after.trimmed().isEmpty()) {
         QTextDocument doc;
+        doc.setDefaultFont(font);
         doc.setMarkdown(after);
         result += doc.toHtml();
     }
@@ -283,6 +301,86 @@ QString sanitizeLatexMath(const QString &content)
     return result;
 }
 
+// Substitutes emoji in already-converted HTML (as produced by
+// QTextDocument::toHtml() or a spliced ```html block), never in Markdown
+// *source* text — QTextDocument::setMarkdown() silently drops raw inline
+// HTML it doesn't recognize as a known Markdown construct (verified: an
+// injected <img> tag, and everything after it on that line, simply
+// vanishes from the parsed result), so an <img> substituted in before
+// setMarkdown() runs can never survive. Operating on the HTML output
+// instead sidesteps that entirely. Skips <pre>/<code> blocks and the
+// insides of tags themselves (attributes), so a reply showing emoji as
+// literal source text isn't touched and attribute values can't be mangled.
+// See EmojiRenderer.h for why substitution is needed at all instead of
+// just relying on Qt's own emoji-font rendering.
+QString substituteEmojiInHtml(const QString &html, int pixelSize)
+{
+    static const QRegularExpression skip(
+        QStringLiteral("<pre[^>]*>.*?</pre>|<code[^>]*>.*?</code>|<[^>]*>"),
+        QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+
+    QString result;
+    int lastEnd = 0;
+    QRegularExpressionMatchIterator it = skip.globalMatch(html);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        result += EmojiRenderer::substituteWithImages(html.mid(lastEnd, match.capturedStart() - lastEnd), pixelSize);
+        result += match.captured(0); // tag, or pre/code block, passed through untouched
+        lastEnd = match.capturedEnd();
+    }
+    result += EmojiRenderer::substituteWithImages(html.mid(lastEnd), pixelSize);
+    return result;
+}
+
+// Qt's rich-text CSS doesn't resolve "em"/"ex" units for <img width/height>
+// (verified: silently resolves to 0), so there's no way to size an emoji
+// image relative to the surrounding text purely in CSS — the pixel size has
+// to be computed from the widget's actual font instead. ensurePolished()
+// first since a freshly-constructed widget's font() can still be the
+// pre-stylesheet default if nothing has forced QSS application yet.
+//
+// QFontInfo::pixelSize() — the font's nominal size, i.e. the "1em" a
+// browser would use to size inline emoji — not QFontMetrics::height(),
+// which is ascent+descent+leading and comes out noticeably taller than the
+// actual text, making the emoji look oversized next to it.
+int emojiPixelSize(QWidget *widget)
+{
+    widget->ensurePolished();
+    return QFontInfo(widget->font()).pixelSize();
+}
+
+// QTextDocument::setMarkdown() collapses paragraph/list-item spacing to 0 —
+// verified directly (both calling setMarkdown() straight on the browser and
+// going through the toHtml()/setHtml() round trip above produce identical
+// zero block margins), so this isn't a side effect of that round trip, it's
+// just how dense Qt's own Markdown-to-block-format conversion is. Setting
+// margins directly on each QTextBlockFormat after the fact is more reliable
+// than patching Qt's generated HTML string, since it doesn't depend on the
+// exact inline style syntax Qt happens to emit.
+//
+// Values come from Settings > Formatting (see SettingsDialog) rather than
+// being hardcoded, defaulting to the same 8px/4px chosen when this was
+// first added. The first block never gets a top margin even if it's a
+// heading — there's nothing above it to separate from inside the bubble,
+// and the bubble's own layout margin already provides that space.
+void applyBlockSpacing(QTextDocument *doc)
+{
+    const QSettings settings;
+    const int paragraphSpacing = settings.value("formatting/paragraphSpacing", 8).toInt();
+    const int listItemSpacing = settings.value("formatting/listItemSpacing", 4).toInt();
+    const int headingSpacingBefore = settings.value("formatting/headingSpacingBefore", 18).toInt();
+
+    for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
+        QTextBlockFormat fmt = block.blockFormat();
+        const bool inList = block.textList() != nullptr;
+        const bool isHeading = fmt.headingLevel() > 0;
+        const bool isFirstBlock = (block == doc->begin());
+        fmt.setTopMargin(isHeading && !isFirstBlock ? headingSpacingBefore : 0);
+        fmt.setBottomMargin(inList ? listItemSpacing : paragraphSpacing);
+        QTextCursor(block).setBlockFormat(fmt);
+    }
+}
+
 } // namespace
 
 AutoHeightTextBrowser::AutoHeightTextBrowser(QWidget *parent)
@@ -311,13 +409,37 @@ AutoHeightTextBrowser::AutoHeightTextBrowser(QWidget *parent)
 
 void AutoHeightTextBrowser::setMarkdownWithHtmlBlocks(const QString &content)
 {
+    ensurePolished(); // font() below must reflect the actual QSS-applied font, not the pre-stylesheet default
+    const QFont ownFont = font();
     const QString sanitized = sanitizeLatexMath(content);
 
     QString html;
-    if (extractHtmlBlocks(sanitized, &html))
-        setHtml(html);
-    else
-        setMarkdown(sanitized);
+    if (!extractHtmlBlocks(sanitized, &html, ownFont)) {
+        QTextDocument doc;
+        doc.setDefaultFont(ownFont); // see extractHtmlBlocks() for why this matters
+        doc.setMarkdown(sanitized);
+        html = doc.toHtml();
+    }
+
+    // Emoji substitution happens here, on the final HTML, and only here —
+    // see substituteEmojiInHtml() for why doing it on the Markdown source
+    // before setMarkdown() runs can't work.
+    setHtml(substituteEmojiInHtml(html, QFontInfo(ownFont).pixelSize()));
+    applyBlockSpacing(document());
+    // adjustHeight() is wired to documentSizeChanged for content that
+    // arrives later (streaming tokens, an async image load), but calling it
+    // explicitly here too removes any dependency on that signal's exact
+    // firing order relative to applyBlockSpacing()'s own edits — this is
+    // the only path guaranteed to run after the document's *final* state
+    // (content + emoji images + spacing) is fully settled.
+    adjustHeight();
+}
+
+void AutoHeightTextBrowser::setPlainTextWithEmoji(const QString &content)
+{
+    setHtml(QStringLiteral("<div style=\"white-space:pre-wrap;\">%1</div>")
+                .arg(EmojiRenderer::escapedPlainTextWithImages(content, emojiPixelSize(this))));
+    adjustHeight();
 }
 
 bool AutoHeightTextBrowser::containsHtmlBlock(const QString &content)
@@ -359,6 +481,54 @@ QVariant AutoHeightTextBrowser::loadResource(int type, const QUrl &name)
     }
 
     return QTextBrowser::loadResource(type, name);
+}
+
+QMimeData *AutoHeightTextBrowser::createMimeDataFromSelection() const
+{
+    QMimeData *mime = QTextBrowser::createMimeDataFromSelection();
+    if (!mime || !mime->hasText())
+        return mime;
+
+    const QTextCursor cursor = textCursor();
+    if (!cursor.hasSelection())
+        return mime;
+
+    // Qt's default plain-text extraction emits one U+FFFC (object
+    // replacement character) per embedded image, in the same left-to-right
+    // order the images appear in the document — so collecting the selected
+    // images' resource names in order and zipping them positionally against
+    // the placeholder characters is enough to restore the originals, without
+    // needing to re-walk both structures in lockstep.
+    QStringList imageNames;
+    const int selStart = cursor.selectionStart();
+    const int selEnd = cursor.selectionEnd();
+    for (QTextBlock block = document()->findBlock(selStart);
+         block.isValid() && block.position() < selEnd; block = block.next()) {
+        for (auto it = block.begin(); !it.atEnd(); ++it) {
+            const QTextFragment fragment = it.fragment();
+            if (!fragment.isValid())
+                continue;
+            if (fragment.position() + fragment.length() <= selStart || fragment.position() >= selEnd)
+                continue;
+            if (fragment.charFormat().isImageFormat())
+                imageNames << fragment.charFormat().toImageFormat().name();
+        }
+    }
+    if (imageNames.isEmpty())
+        return mime;
+
+    QString text = mime->text();
+    int nextImage = 0;
+    for (int i = 0; i < text.size() && nextImage < imageNames.size(); ++i) {
+        if (text.at(i) == QChar(0xFFFC)) {
+            const QString emoji = EmojiRenderer::emojiForResourcePath(imageNames.at(nextImage));
+            if (!emoji.isEmpty())
+                text.replace(i, 1, emoji);
+            ++nextImage;
+        }
+    }
+    mime->setText(text);
+    return mime;
 }
 
 void AutoHeightTextBrowser::resizeEvent(QResizeEvent *event)

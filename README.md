@@ -507,3 +507,8 @@ You are free to use, study, modify, and redistribute this software under the ter
 Any distributed modified version or derivative work of LinOllama must also be licensed under GPLv3 and the corresponding source code must be made available.
 
 See the LICENSE file for the complete license text.
+
+LinOllama bundles Noto Emoji SVG images (`src/emoji/`) to render emoji
+consistently across systems, regardless of what's installed on the host.
+They are licensed separately under the SIL Open Font License 1.1 — see
+`src/emoji/LICENSE`.

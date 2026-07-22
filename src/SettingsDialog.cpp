@@ -30,6 +30,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QTabWidget>
+#include <limits>
 #include <QScrollArea>
 #include <QLineEdit>
 #include <QPixmap>
@@ -194,6 +195,8 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     auto *appearancePage = new QWidget;
     auto *appearancePageLayout = new QVBoxLayout(appearancePage);
+    auto *formattingPage = new QWidget;
+    auto *formattingPageLayout = new QVBoxLayout(formattingPage);
     auto *inputsPage = new QWidget;
     auto *inputsPageLayout = new QVBoxLayout(inputsPage);
     auto *ollamaPage = new QWidget;
@@ -204,23 +207,34 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     auto *dataPageLayout = new QVBoxLayout(dataPage);
 
     tabs->addTab(appearancePage, "Appearance");
+    tabs->addTab(formattingPage, "Formatting");
     tabs->addTab(inputsPage, "Inputs");
     // Ollama has grown into the tallest tab by far (model management,
     // generation parameters, server environment, pull/delete) — a
     // QScrollArea rather than sub-tabs keeps every section visible in one
     // place (still searchable-by-eye top to bottom) instead of hiding half
     // of it behind another layer of navigation.
-    auto *ollamaScrollArea = new QScrollArea;
-    ollamaScrollArea->setWidget(ollamaPage);
-    ollamaScrollArea->setWidgetResizable(true);
-    ollamaScrollArea->setFrameShape(QFrame::NoFrame);
-    // Scrolling itself (wheel, drag) still works — this only hides the
-    // bar's own track/handle, matching the same sleek look already used
-    // for the main chat message list (see ChatWidget's m_scrollArea).
-    ollamaScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    tabs->addTab(ollamaScrollArea, "Ollama");
-    tabs->addTab(whisperPage, "Whisper");
-    tabs->addTab(dataPage, "Data");
+    //
+    // Whisper and Data get the same treatment for a different reason: at a
+    // larger "appearance/fontScale", every label/button in them grows too,
+    // and the dialog itself doesn't grow past setMinimumHeight() to match —
+    // without a scroll area, that overflow squeezed widgets into less
+    // height than their wrapped text actually needed, showing as
+    // overlapping lines rather than a clipped/scrollable page.
+    auto makeScrollablePage = [](QWidget *page) {
+        auto *scrollArea = new QScrollArea;
+        scrollArea->setWidget(page);
+        scrollArea->setWidgetResizable(true);
+        scrollArea->setFrameShape(QFrame::NoFrame);
+        // Scrolling itself (wheel, drag) still works — this only hides the
+        // bar's own track/handle, matching the same sleek look already used
+        // for the main chat message list (see ChatWidget's m_scrollArea).
+        scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        return scrollArea;
+    };
+    tabs->addTab(makeScrollablePage(ollamaPage), "Ollama");
+    tabs->addTab(makeScrollablePage(whisperPage), "Whisper");
+    tabs->addTab(makeScrollablePage(dataPage), "Data");
 
     // --- Appearance tab ----------------------------------------------------
     // Wrapped in a bordered QGroupBox (rather than a bare QLabel heading)
@@ -241,6 +255,91 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &SettingsDialog::onThemeComboChanged);
     appearanceLayout->addRow("Theme", m_themeCombo);
+
+    // Scales every "font-size: Npx" declaration in Theme::styleSheet() (see
+    // applyFontScale() there) — the whole app's text, not just the chat
+    // bubbles. Applied live via notifyAppearanceChanged() the same way an
+    // accent color change is, so there's no need to reopen Settings or
+    // restart to see the effect.
+    auto *fontScaleRow = new QWidget;
+    auto *fontScaleRowLayout = new QHBoxLayout(fontScaleRow);
+    fontScaleRowLayout->setContentsMargins(0, 0, 0, 0);
+
+    // Discrete 0.25x steps (0.5x .. 2.0x) rather than a continuous range —
+    // the slider's own range is just the step *index* (0..6), which is
+    // what actually guarantees only these values are ever reachable by
+    // dragging (a continuous range with a "single step" hint doesn't stop a
+    // drag from landing in between). The spinbox can still have an
+    // in-between value typed into it directly; the sync below snaps that to
+    // the nearest step on the same round trip. Capped at 2.0x (was 4.0x) —
+    // past that, message bubbles started visibly cropping text, a layout-
+    // timing issue in AutoHeightTextBrowser's height calculation that's out
+    // of scope to fully chase down right now.
+    static const QVector<double> kFontScaleSteps = {
+        0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0,
+    };
+    auto indexForFontScale = [](double scale) {
+        int bestIndex = 0;
+        double bestDiff = std::numeric_limits<double>::max();
+        for (int i = 0; i < kFontScaleSteps.size(); ++i) {
+            const double diff = qAbs(kFontScaleSteps[i] - scale);
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestIndex = i;
+            }
+        }
+        return bestIndex;
+    };
+
+    auto *fontScaleSlider = new QSlider(Qt::Horizontal);
+    fontScaleSlider->setObjectName("fontScaleSlider");
+    fontScaleSlider->setRange(0, kFontScaleSteps.size() - 1);
+    fontScaleSlider->setTickPosition(QSlider::TicksBelow);
+    fontScaleSlider->setTickInterval(1);
+    fontScaleRowLayout->addWidget(fontScaleSlider, /*stretch=*/1);
+
+    auto *fontScaleSpinBox = new QDoubleSpinBox;
+    fontScaleSpinBox->setRange(0.5, 2.0);
+    fontScaleSpinBox->setSingleStep(0.25);
+    fontScaleSpinBox->setDecimals(2);
+    fontScaleSpinBox->setSuffix("x");
+    fontScaleRowLayout->addWidget(fontScaleSpinBox);
+
+    // Same reset glyph/size/tooltip as makeColorPickerRow()'s reset button —
+    // just sets the spinbox back to 1.0x, which cascades through the sync
+    // connections below to reset the slider, persist, and re-render live,
+    // same as picking 1.0x by hand.
+    auto *fontScaleResetButton = new QPushButton(QString::fromUtf8("\xE2\x86\xBA")); // U+21BA ANTICLOCKWISE OPEN CIRCLE ARROW
+    fontScaleResetButton->setFixedSize(24, 20);
+    fontScaleResetButton->setCursor(Qt::PointingHandCursor);
+    fontScaleResetButton->setToolTip("Reset to default (1.0x)");
+    fontScaleRowLayout->addWidget(fontScaleResetButton);
+    connect(fontScaleResetButton, &QPushButton::clicked, fontScaleSpinBox, [fontScaleSpinBox]() {
+        fontScaleSpinBox->setValue(1.0);
+    });
+
+    const double storedFontScale = QSettings().value("appearance/fontScale", 1.0).toDouble();
+    const int storedFontScaleIndex = indexForFontScale(storedFontScale);
+    fontScaleSlider->setValue(storedFontScaleIndex);
+    fontScaleSpinBox->setValue(kFontScaleSteps[storedFontScaleIndex]);
+
+    // Kept in sync with each other the same way as the other slider/spinbox
+    // pairs in this dialog, just via a step-index<->value lookup instead of
+    // a simple int<->double conversion.
+    connect(fontScaleSlider, &QSlider::valueChanged, fontScaleSpinBox, [fontScaleSpinBox](int index) {
+        fontScaleSpinBox->setValue(kFontScaleSteps[index]);
+    });
+    connect(fontScaleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            fontScaleSlider, [fontScaleSlider, indexForFontScale](double value) {
+        fontScaleSlider->setValue(indexForFontScale(value));
+    });
+    connect(fontScaleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, [this](double value) {
+        QSettings().setValue("appearance/fontScale", value);
+        m_themeManager->notifyAppearanceChanged();
+        emit formattingSettingsChanged();
+    });
+
+    appearanceLayout->addRow("Font size", fontScaleRow);
 
     m_sendButtonStyleCombo = new QComboBox;
     m_sendButtonStyleCombo->addItem("Paper plane icon", "plane");
@@ -353,7 +452,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
         auto *nameLabel = new QLabel(label);
         nameLabel->setAlignment(Qt::AlignHCenter);
-        nameLabel->setStyleSheet("font-size: 11px; font-weight: normal; opacity: 0.7;");
+        nameLabel->setObjectName("settingsHintLabel");
         columnLayout->addWidget(nameLabel, 0, Qt::AlignHCenter);
         columnLayout->addWidget(makeColorPickerRow(settingsKey), 0, Qt::AlignHCenter);
 
@@ -374,6 +473,26 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     appearancePageLayout->addWidget(appearanceGroup);
     appearancePageLayout->addStretch();
 
+    // --- Formatting tab ------------------------------------------------------
+    // Controls AutoHeightTextBrowser::applyBlockSpacing() — how much vertical
+    // room a rendered reply's paragraphs, list items, and headings get.
+    // Qt's own Markdown-to-block-format conversion collapses all of these to
+    // 0, which reads as cramped for anything with more than a line or two of
+    // structure, so this dialog exposes them directly rather than baking in
+    // one fixed guess.
+    auto *spacingGroup = new QGroupBox("Message spacing");
+    auto *spacingLayout = new QVBoxLayout(spacingGroup);
+
+    spacingLayout->addWidget(makeSpacingSliderRow(
+        "Paragraph spacing", "formatting/paragraphSpacing", 0, 40, 8));
+    spacingLayout->addWidget(makeSpacingSliderRow(
+        "List item spacing", "formatting/listItemSpacing", 0, 40, 4));
+    spacingLayout->addWidget(makeSpacingSliderRow(
+        "Heading spacing (before)", "formatting/headingSpacingBefore", 0, 60, 18));
+
+    formattingPageLayout->addWidget(spacingGroup);
+    formattingPageLayout->addStretch();
+
     // --- Ollama tab: Model ---------------------------------------------------
     auto *modelGroup = new QGroupBox("Model");
     auto *modelLayout = new QVBoxLayout(modelGroup);
@@ -390,7 +509,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "var, or an automatic VRAM-based default). There's no \"unlimited\" option — every model "
         "has a hard maximum context length that Ollama enforces regardless of this setting.");
     contextLengthHint->setWordWrap(true);
-    contextLengthHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    contextLengthHint->setObjectName("settingsHintLabel");
     modelLayout->addWidget(contextLengthHint);
 
     auto *contextSliderRow = new QHBoxLayout;
@@ -441,7 +560,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "model repeatedly. On, chats waiting on the model that's already loaded may jump ahead of "
         "others to reduce how often models get swapped.");
     modelOptimizationHint->setWordWrap(true);
-    modelOptimizationHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    modelOptimizationHint->setObjectName("settingsHintLabel");
     // Real QWidget margins, not QSS "padding" — a stylesheet's padding on a
     // word-wrapped QLabel isn't reliably folded into its own heightForWidth()
     // calculation (that's what caused the clipped top/bottom lines before),
@@ -467,7 +586,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "existed. The fields below are pre-filled with those same defaults, so checking this and "
         "leaving everything untouched changes nothing — only fields you actually edit affect anything.");
     genParamsHint->setWordWrap(true);
-    genParamsHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    genParamsHint->setObjectName("settingsHintLabel");
     genParamsLayout->addWidget(genParamsHint);
 
     auto *genParamsForm = new QFormLayout;
@@ -555,7 +674,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "instead. Leave a field at its default to omit that variable entirely, same as never having "
         "set it.");
     envHint->setWordWrap(true);
-    envHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    envHint->setObjectName("settingsHintLabel");
     envLayout->addRow(envHint);
 
     auto *modelsPathRow = new QHBoxLayout;
@@ -612,7 +731,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     m_pullStatusLabel = new QLabel;
     m_pullStatusLabel->setWordWrap(true);
-    m_pullStatusLabel->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    m_pullStatusLabel->setObjectName("settingsHintLabel");
     m_pullStatusLabel->setVisible(false);
     modelsGroupLayout->addWidget(m_pullStatusLabel);
 
@@ -687,7 +806,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "gradually, avoiding sharp jumps at the cost of a slight lag. Only affects the meter's "
         "display, not the actual recording.");
     meterSmoothingHint->setWordWrap(true);
-    meterSmoothingHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    meterSmoothingHint->setObjectName("settingsHintLabel");
     micGroupLayout->addWidget(meterSmoothingHint);
 
     inputsPageLayout->addWidget(micGroup);
@@ -709,7 +828,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "before sending. On: it's sent to Ollama immediately, with no chance to fix a "
         "misheard word first.");
     voiceAutoSendHint->setWordWrap(true);
-    voiceAutoSendHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    voiceAutoSendHint->setObjectName("settingsHintLabel");
     whisperLayout->addWidget(voiceAutoSendHint);
 
     m_liveTranscriptionCheck = new QCheckBox("Enable live transcription (while still talking)");
@@ -725,14 +844,14 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "process — requires that binary to be built alongside whisper-cli (see the status line "
         "below); has no effect without it.");
     liveTranscriptionHint->setWordWrap(true);
-    liveTranscriptionHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    liveTranscriptionHint->setObjectName("settingsHintLabel");
     whisperLayout->addWidget(liveTranscriptionHint);
 
     whisperLayout->addSpacing(10); // visual break before the binary/model-location controls below
 
     m_whisperStatusLabel = new QLabel;
     m_whisperStatusLabel->setWordWrap(true);
-    m_whisperStatusLabel->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    m_whisperStatusLabel->setObjectName("settingsHintLabel");
     whisperLayout->addWidget(m_whisperStatusLabel);
 
     auto *whisperPathsRow = new QHBoxLayout;
@@ -794,7 +913,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "English-only but a little faster/more accurate for that language alone. Hover a row for "
         "its full details.");
     whisperHint->setWordWrap(true);
-    whisperHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    whisperHint->setObjectName("settingsHintLabel");
     whisperLayout->addWidget(whisperHint);
 
     whisperPageLayout->addWidget(whisperGroup);
@@ -810,7 +929,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "that. Nothing here is normally worth touching by hand — this is just so the files are easy "
         "to find, e.g. to back them up yourself outside the app.");
     storageHint->setWordWrap(true);
-    storageHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    storageHint->setObjectName("settingsHintLabel");
     storageLayout->addRow(storageHint);
 
     auto *conversationsPathRow = new QHBoxLayout;
@@ -856,7 +975,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "new entries (fresh ids) — it never overwrites or removes anything already here, so "
         "importing the same backup twice just duplicates it.");
     conversationsBackupHint->setWordWrap(true);
-    conversationsBackupHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    conversationsBackupHint->setObjectName("settingsHintLabel");
     backupLayout->addWidget(conversationsBackupHint);
 
     auto *settingsBackupRow = new QHBoxLayout;
@@ -874,7 +993,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "Import replaces every current setting with whatever's in the chosen file — restart "
         "LinOllama afterward so everything picks it up.");
     settingsBackupHint->setWordWrap(true);
-    settingsBackupHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    settingsBackupHint->setObjectName("settingsHintLabel");
     backupLayout->addWidget(settingsBackupHint);
 
     dataPageLayout->addWidget(backupGroup);
@@ -885,7 +1004,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     auto *clearHint = new QLabel(
         "Irreversible — consider exporting a backup above first.");
     clearHint->setWordWrap(true);
-    clearHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    clearHint->setObjectName("settingsHintLabel");
     clearLayout->addWidget(clearHint);
 
     auto *clearRow = new QHBoxLayout;
@@ -921,7 +1040,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     auto *offloadHint = new QLabel(
         "Frees a model's memory/VRAM immediately instead of waiting for its normal idle timeout.");
     offloadHint->setWordWrap(true);
-    offloadHint->setStyleSheet("font-size: 11px; opacity: 0.7; font-weight: normal;");
+    offloadHint->setObjectName("settingsHintLabel");
     offloadHeaderRow->addWidget(offloadHint, /*stretch=*/1);
     auto *refreshButton = new QPushButton("Refresh");
     connect(refreshButton, &QPushButton::clicked, this, &SettingsDialog::refreshLoadedModels);
@@ -1301,6 +1420,49 @@ QWidget *SettingsDialog::makeColorPickerRow(const QString &settingsKey)
     });
 
     m_colorSwatchButtons.append({swatchButton, settingsKey});
+    return row;
+}
+
+QWidget *SettingsDialog::makeSpacingSliderRow(const QString &labelText, const QString &settingsKey,
+                                              int minVal, int maxVal, int defaultValue)
+{
+    auto *row = new QWidget;
+    auto *rowLayout = new QHBoxLayout(row);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto *label = new QLabel(labelText);
+    rowLayout->addWidget(label, /*stretch=*/1);
+
+    auto *slider = new QSlider(Qt::Horizontal);
+    // Gives each of these sliders its own themed groove/handle (see
+    // Theme.cpp's "Settings sliders" rule, which styles every objectName
+    // ending in "Slider" the same way the accent-colored progress bars are)
+    // instead of the plain OS-default look the context-length/meter-
+    // smoothing sliders had before that rule existed.
+    slider->setObjectName(settingsKey.section(QLatin1Char('/'), -1) + "Slider");
+    slider->setRange(minVal, maxVal);
+    rowLayout->addWidget(slider, /*stretch=*/2);
+
+    auto *spinBox = new QSpinBox;
+    spinBox->setRange(minVal, maxVal);
+    spinBox->setSuffix(" px");
+    rowLayout->addWidget(spinBox);
+
+    const int storedValue = QSettings().value(settingsKey, defaultValue).toInt();
+    slider->setValue(storedValue);
+    spinBox->setValue(storedValue);
+
+    // Kept in sync with each other the same way as the context-length
+    // slider/spinbox pair — persistence only needs to happen once, off the
+    // spinbox's own valueChanged, since Qt no-ops setValue() when the value
+    // hasn't actually changed (so this can't loop).
+    connect(slider, &QSlider::valueChanged, spinBox, &QSpinBox::setValue);
+    connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), slider, &QSlider::setValue);
+    connect(spinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, [this, settingsKey](int value) {
+        QSettings().setValue(settingsKey, value);
+        emit formattingSettingsChanged();
+    });
+
     return row;
 }
 

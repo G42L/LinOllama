@@ -1,4 +1,5 @@
 #include "ThinkingSectionWidget.h"
+#include "EmojiRenderer.h"
 
 #include <QVBoxLayout>
 #include <QLabel>
@@ -7,6 +8,7 @@
 #include <QTimer>
 #include <QPainter>
 #include <QPixmap>
+#include <QFontInfo>
 
 ThinkingSectionWidget::ThinkingSectionWidget(QWidget *parent)
     : QWidget(parent)
@@ -42,6 +44,10 @@ ThinkingSectionWidget::ThinkingSectionWidget(QWidget *parent)
     m_bodyLabel->setObjectName("thinkingBody");
     m_bodyLabel->setWordWrap(true);
     m_bodyLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // Reasoning text is shown literally, never as Markdown — but still runs
+    // through EmojiRenderer, hence RichText rather than the default
+    // auto-detected format (see appendThinkingText()).
+    m_bodyLabel->setTextFormat(Qt::RichText);
     bodyLayout->addWidget(m_bodyLabel);
 
     outer->addWidget(m_bodyContainer);
@@ -56,7 +62,10 @@ void ThinkingSectionWidget::appendThinkingText(const QString &text)
         m_startMs = QDateTime::currentMSecsSinceEpoch();
 
     m_buffer += text;
-    m_bodyLabel->setText(m_buffer);
+    m_bodyLabel->ensurePolished();
+    const int pixelSize = QFontInfo(m_bodyLabel->font()).pixelSize();
+    m_bodyLabel->setText(QStringLiteral("<div style=\"white-space:pre-wrap;\">%1</div>")
+                              .arg(EmojiRenderer::escapedPlainTextWithImages(m_buffer, pixelSize)));
 
     // Auto-expand as thinking content starts arriving, unless the person
     // has already touched the toggle themselves this turn.

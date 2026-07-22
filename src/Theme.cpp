@@ -7,6 +7,7 @@
 #include <QPainter>
 #include <QSettings>
 #include <QColor>
+#include <QRegularExpression>
 
 namespace {
 
@@ -19,6 +20,42 @@ QString applyTokens(QString qss, const QHash<QString, QString> &tokens)
     for (auto it = tokens.constBegin(); it != tokens.constEnd(); ++it)
         qss.replace(QStringLiteral("{{%1}}").arg(it.key()), it.value());
     return qss;
+}
+
+// Every text size in the app is a literal "font-size: Npx;" declaration
+// somewhere in this stylesheet (confirmed: nothing sets a font-family/size
+// via C++ code directly, aside from AutoHeightTextBrowser's emoji-image
+// sizing, which reads the *resolved* QFont at render time and so already
+// follows whatever this produces). Scaling the whole app's text therefore
+// just means multiplying every one of those numbers by `scale` — there's no
+// single QApplication::setFont() call that could do it, since an explicit
+// QSS font-size on a more specific selector always wins over the
+// application-wide default font. A no-op at 1.0x skips the regex pass
+// entirely, since that's the overwhelmingly common case (nobody's touched
+// the slider from its default).
+QString applyFontScale(QString qss, double scale)
+{
+    if (qFuzzyCompare(scale, 1.0))
+        return qss;
+
+    // Qt's QSS parser rejects any font-size value with a decimal point —
+    // verified directly: even "26.0px" (a whole number, just formatted with
+    // one decimal) silently fails to parse and falls back to Qt's generic
+    // default size, while plain "26px" works. So this has to round to a
+    // whole pixel and format as a bare integer, never with any decimals.
+    static const QRegularExpression fontSizeRule(QStringLiteral("font-size:\\s*(\\d+(?:\\.\\d+)?)px"));
+    QString result;
+    int lastEnd = 0;
+    QRegularExpressionMatchIterator it = fontSizeRule.globalMatch(qss);
+    while (it.hasNext()) {
+        const QRegularExpressionMatch match = it.next();
+        result += qss.mid(lastEnd, match.capturedStart() - lastEnd);
+        const int scaledPx = qMax(1, qRound(match.captured(1).toDouble() * scale));
+        result += QStringLiteral("font-size: %1px").arg(scaledPx);
+        lastEnd = match.capturedEnd();
+    }
+    result += qss.mid(lastEnd);
+    return result;
 }
 
 QString templateQss()
@@ -315,30 +352,69 @@ QProgressBar#contextUsageProgress[nearLimit="true"]::chunk {
     background-color: {{danger}};
 }
 
-/* Settings' context-length and meter-smoothing sliders — filled portion and
-   handle both use {{accent}}, so they follow a custom "Application" color
-   the same way the progress bars above do. */
+/* Settings sliders — filled portion and handle both use {{accent}}, so they
+   follow a custom "Application" color the same way the progress bars above
+   do. Qt's QSS #id selectors need an exact match (no "ends with" wildcard),
+   so every themed slider's objectName has to be listed explicitly here —
+   see SettingsDialog::makeSpacingSliderRow() and the font-size slider. */
 QSlider#contextLengthSlider::groove:horizontal,
-QSlider#meterSmoothingSlider::groove:horizontal {
+QSlider#meterSmoothingSlider::groove:horizontal,
+QSlider#paragraphSpacingSlider::groove:horizontal,
+QSlider#listItemSpacingSlider::groove:horizontal,
+QSlider#headingSpacingBeforeSlider::groove:horizontal,
+QSlider#fontScaleSlider::groove:horizontal {
     background-color: {{progressTrack}};
     height: 6px;
     border-radius: 3px;
 }
 
 QSlider#contextLengthSlider::sub-page:horizontal,
-QSlider#meterSmoothingSlider::sub-page:horizontal {
+QSlider#meterSmoothingSlider::sub-page:horizontal,
+QSlider#paragraphSpacingSlider::sub-page:horizontal,
+QSlider#listItemSpacingSlider::sub-page:horizontal,
+QSlider#headingSpacingBeforeSlider::sub-page:horizontal,
+QSlider#fontScaleSlider::sub-page:horizontal {
     background-color: {{accent}};
     height: 6px;
     border-radius: 3px;
 }
 
 QSlider#contextLengthSlider::handle:horizontal,
-QSlider#meterSmoothingSlider::handle:horizontal {
+QSlider#meterSmoothingSlider::handle:horizontal,
+QSlider#paragraphSpacingSlider::handle:horizontal,
+QSlider#listItemSpacingSlider::handle:horizontal,
+QSlider#headingSpacingBeforeSlider::handle:horizontal,
+QSlider#fontScaleSlider::handle:horizontal {
     background-color: {{accent}};
     width: 14px;
     height: 14px;
     margin: -4px 0;
     border-radius: 7px;
+}
+
+/* Small muted descriptive text — Settings' per-section hint labels
+   ("Unchecked, Ollama picks its own default..." etc.) and the system-monitor
+   strip's meter name/value/"no GPU" labels. Previously each of these set its
+   own inline setStyleSheet() with a literal "font-size: 11px" baked in,
+   which meant Theme::applyFontScale() (which only scans this generated
+   stylesheet) never touched them — the font-size slider visibly resized
+   every chat bubble but left these completely alone. Routing them through
+   objectName selectors here instead means one font-scale pass covers them
+   automatically, live, the same as everything else. */
+#settingsHintLabel {
+    font-size: 11px;
+    font-weight: normal;
+    opacity: 0.7;
+}
+
+#statMeterLabel {
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+#statNoGpuLabel {
+    font-size: 11px;
+    opacity: 0.5;
 }
 
 /* --- Input bar ------------------------------------------------------------ */
@@ -803,7 +879,8 @@ QString Theme::styleSheet(bool dark)
     // itself just became near-white) — see currentOnAccentColor()'s own doc.
     tokens["onAccent"] = Theme::currentOnAccentColor(dark);
 
-    return applyTokens(templateQss(), tokens);
+    const double fontScale = QSettings().value("appearance/fontScale", 1.0).toDouble();
+    return applyFontScale(applyTokens(templateQss(), tokens), fontScale);
 }
 
 QString Theme::colorToken(const QString &tokenName, bool dark)
@@ -879,4 +956,10 @@ QIcon Theme::loadThemedIconMultiSize(const QString &resourcePath, bool dark, con
             icon.addPixmap(single.pixmap(sizePx, sizePx));
     }
     return icon;
+}
+
+int Theme::scaledPixelSize(int basePx)
+{
+    const double fontScale = QSettings().value("appearance/fontScale", 1.0).toDouble();
+    return qMax(1, qRound(basePx * fontScale));
 }

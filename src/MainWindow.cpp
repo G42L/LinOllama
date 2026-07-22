@@ -10,6 +10,7 @@
 #include <QCloseEvent>
 #include <QLabel>
 #include <QFrame>
+#include <QScrollArea>
 #include <QMessageBox>
 #include <QWidgetAction>
 #include <QWebEngineView>
@@ -142,6 +143,17 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     connect(m_chatWidget, &ChatWidget::audioLevelChanged,
             m_statsStrip, &StatsStripWidget::setMicLevel);
 
+    // Wrapped in a scroll area rather than added to the splitter directly —
+    // this pane has no minimum-height guarantee against its own content (a
+    // long GPU name wrapping to several lines, more GPUs, or a large
+    // font-size scale all make it taller), and without this, anything past
+    // the window's bottom edge was just clipped with no way to reach it.
+    auto *statsScrollArea = new QScrollArea;
+    statsScrollArea->setWidget(m_statsStrip);
+    statsScrollArea->setWidgetResizable(true);
+    statsScrollArea->setFrameShape(QFrame::NoFrame);
+    statsScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
     // All three panes live in one splitter so every boundary between them
     // is drag-resizable, sidebar included. setChildrenCollapsible(false)
     // stops a drag from accidentally hiding a pane entirely — that read as
@@ -149,7 +161,7 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     m_splitter = new QSplitter(Qt::Horizontal);
     m_splitter->addWidget(m_sidebar);
     m_splitter->addWidget(m_chatWidget);
-    m_splitter->addWidget(m_statsStrip);
+    m_splitter->addWidget(statsScrollArea);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1); // chat is the only pane that should grab extra space
     m_splitter->setStretchFactor(2, 0);
@@ -329,6 +341,16 @@ void MainWindow::onSettingsRequested()
             m_chatWidget, &ChatWidget::refreshAudioInputDevice);
     connect(&dialog, &SettingsDialog::meterSmoothingChanged,
             m_chatWidget, &ChatWidget::refreshMeterSmoothing);
+    connect(&dialog, &SettingsDialog::formattingSettingsChanged,
+            m_chatWidget, &ChatWidget::refreshFormattingSettings);
+    // The font-size scale (part of the same "Formatting" tab) affects the
+    // sidebar's conversation list too — each row's QListWidgetItem has its
+    // sizeHint fixed at construction time (see refreshSidebar()), so simply
+    // re-styling the app doesn't shrink/grow those slots to match the row
+    // widget's new content size, leaving titles cropped or overlapping
+    // until the sidebar is rebuilt from scratch.
+    connect(&dialog, &SettingsDialog::formattingSettingsChanged,
+            this, &MainWindow::refreshSidebar);
     dialog.exec();
 }
 
@@ -381,15 +403,28 @@ void MainWindow::setSidebarCollapsed(bool collapsed)
 void MainWindow::reloadSidebarIcons()
 {
     const bool dark = m_themeManager->isDarkActive();
+    // Scaled by the same "appearance/fontScale" setting the font-size slider
+    // controls — these are plain rasterized QIcons/QToolButton::iconSize,
+    // neither of which is part of the QSS stylesheet, so without this they'd
+    // stay fixed at their base size regardless of that slider. Re-applied
+    // here since this already runs on every ThemeManager::themeChanged,
+    // which notifyAppearanceChanged() (the font-scale slider's own live-
+    // update path) already emits.
+    const int iconPx = Theme::scaledPixelSize(16);
+    const QSize iconSize(iconPx, iconPx);
+
     // Same "secondaryText" tone as the other icon-only toolbar buttons —
     // now that new-conversation lives in the top bar rather than a bordered
     // sidebar button, it should read as a toolbar icon, not a CTA.
-    m_newConversationButton->setIcon(Theme::loadThemedIcon(":/icons/new-chat.svg", dark, 16, "secondaryText"));
-    m_importConversationButton->setIcon(Theme::loadThemedIcon(":/icons/import.svg", dark, 16, "secondaryText"));
+    m_newConversationButton->setIconSize(iconSize);
+    m_newConversationButton->setIcon(Theme::loadThemedIcon(":/icons/new-chat.svg", dark, iconPx, "secondaryText"));
+    m_importConversationButton->setIconSize(iconSize);
+    m_importConversationButton->setIcon(Theme::loadThemedIcon(":/icons/import.svg", dark, iconPx, "secondaryText"));
 
+    m_sidebarToggleButton->setIconSize(iconSize);
     m_sidebarToggleButton->setIcon(Theme::loadThemedIcon(
         m_sidebarCollapsed ? ":/icons/sidebar-expand.svg" : ":/icons/sidebar-collapse.svg",
-        dark, 16, "secondaryText"));
+        dark, iconPx, "secondaryText"));
     m_sidebarToggleButton->setToolTip(m_sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar");
 }
 

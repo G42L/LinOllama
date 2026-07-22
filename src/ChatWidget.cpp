@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QFrame>
 #include <QScrollBar>
+#include <QCoreApplication>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -444,6 +445,13 @@ void ChatWidget::refreshMeterSmoothing()
     m_voiceRecorder.refreshMeterSmoothing();
 }
 
+void ChatWidget::refreshFormattingSettings()
+{
+    // renderConversation() already no-ops cleanly when there's no active
+    // conversation (a fresh empty chat, or the very first launch).
+    renderConversation();
+}
+
 void ChatWidget::setActiveConversation(const QString &conversationId)
 {
     // Switching conversations no longer touches any in-flight stream — a
@@ -598,6 +606,16 @@ void ChatWidget::clearMessages()
     // at — clear it now (synchronously, before any stale pointer could be
     // used) rather than waiting for the deferred deleteLater() to run.
     m_userMessageMarkers.clear();
+
+    // renderConversation() rebuilds the whole message list immediately
+    // after calling this — deleteLater() above only *schedules* destruction,
+    // so without this, the just-removed rows (still alive, still at their
+    // old size) would keep occupying space alongside the freshly-built ones
+    // until the event loop eventually got around to the deferred deletion.
+    // Most visible with a font-scale change: shrinking back down left the
+    // previous, taller bubbles lingering underneath, showing as empty space
+    // where they used to be. Flushing immediately closes that gap.
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 }
 
 void ChatWidget::renderConversation()
@@ -786,8 +804,9 @@ AutoHeightTextBrowser *ChatWidget::appendMessageBubble(const QString &role, cons
     browser->setObjectName("bubbleText");
     if (isUser || isError) {
         // Show the person's own text (and error messages) literally — no
-        // markdown interpretation of something they typed or a raw error string.
-        browser->setPlainText(content);
+        // markdown interpretation of something they typed or a raw error
+        // string — but still swap recognized emoji for the bundled images.
+        browser->setPlainTextWithEmoji(content);
         bubbleLayout->addWidget(browser);
     } else {
         bubbleLayout->addWidget(browser); // added before rendering so map widgets (see below) land after it

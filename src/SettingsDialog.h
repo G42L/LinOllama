@@ -91,6 +91,16 @@ signals:
     // ("voice/meterSmoothingPercent") already happened by the time this fires.
     void meterSmoothingChanged();
 
+    // Emitted whenever any Formatting-tab slider changes (paragraph/list/
+    // heading spacing, or the whole-app font-size scale) — ChatWidget
+    // listens live and calls refreshFormattingSettings(). Unlike most other
+    // settings here, these are baked directly into each message's rendered
+    // QTextDocument content at render time, so nothing already on screen
+    // updates just from the QSettings value changing — the conversation
+    // has to be re-rendered from scratch to pick up the new value.
+    // Persistence already happened by the time this fires.
+    void formattingSettingsChanged();
+
 private slots:
     void onThemeComboChanged(int index);
     void onThemeColorPresetChanged(int index);
@@ -181,6 +191,17 @@ private:
     // tracks the Application color, so changing that one has to refresh
     // every other swatch as well).
     QWidget *makeColorPickerRow(const QString &settingsKey);
+
+    // Builds one row — a label, a slider, and a spinbox kept in sync with
+    // each other — for a single Formatting-tab spacing value (paragraph,
+    // list item, or heading-before spacing, all in pixels). Persists
+    // straight to QSettings (settingsKey) on every change; no live signal
+    // out of this dialog, since AutoHeightTextBrowser::applyBlockSpacing()
+    // reads the value fresh at render time — same "no live signal needed"
+    // pattern as the generation-parameter fields, since it only affects
+    // messages rendered from this point on, not ones already on screen.
+    QWidget *makeSpacingSliderRow(const QString &labelText, const QString &settingsKey,
+                                  int minVal, int maxVal, int defaultValue);
 
     // Shows a QMessageBox::Warning with a Cancel button (default) and a
     // red "dangerButton"-styled confirm button labeled `confirmLabel` — same

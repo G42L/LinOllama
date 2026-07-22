@@ -1,9 +1,11 @@
 #include "ToolCallSectionWidget.h"
+#include "EmojiRenderer.h"
 
 #include <QVBoxLayout>
 #include <QLabel>
 #include <QToolButton>
 #include <QJsonValue>
+#include <QFontInfo>
 
 ToolCallSectionWidget::ToolCallSectionWidget(const QString &toolName, const QJsonObject &arguments,
                                                QWidget *parent)
@@ -36,6 +38,10 @@ ToolCallSectionWidget::ToolCallSectionWidget(const QString &toolName, const QJso
     m_bodyLabel->setObjectName("thinkingBody");
     m_bodyLabel->setWordWrap(true);
     m_bodyLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    // Arguments/results are shown literally, never as Markdown — but still
+    // run through EmojiRenderer, hence RichText rather than the default
+    // auto-detected format (see updateBodyText()).
+    m_bodyLabel->setTextFormat(Qt::RichText);
     bodyLayout->addWidget(m_bodyLabel);
 
     outer->addWidget(m_bodyContainer);
@@ -78,7 +84,10 @@ void ToolCallSectionWidget::updateBodyText()
     if (!text.isEmpty())
         text += "\n\n";
     text += m_resolved ? m_resultText : QStringLiteral("Running…");
-    m_bodyLabel->setText(text);
+    m_bodyLabel->ensurePolished();
+    const int pixelSize = QFontInfo(m_bodyLabel->font()).pixelSize();
+    m_bodyLabel->setText(QStringLiteral("<div style=\"white-space:pre-wrap;\">%1</div>")
+                              .arg(EmojiRenderer::escapedPlainTextWithImages(text, pixelSize)));
 }
 
 QString ToolCallSectionWidget::formatArguments(const QJsonObject &arguments)
