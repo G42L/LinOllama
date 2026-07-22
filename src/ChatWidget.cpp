@@ -1128,11 +1128,17 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
     // Lets someone check what the model actually produced (including the
     // literal ```html source) versus the rendered/live result — only shown
     // when there's actually an html block to compare against; a plain-
-    // Markdown or map-only reply has nothing a raw view would add.
+    // Markdown or map-only reply has nothing a raw view would add. Rendered
+    // with full formatting (syntax highlighting + emoji), same as any other
+    // message — the ```html fence itself gets highlighted as HTML source
+    // here (renderHtmlBlocksLive=false) rather than live-injected, since a
+    // second live Chromium rendering would just duplicate the one already
+    // shown above and, being its own separate DOM, never picks up this
+    // app's code-highlighting/emoji treatment anyway.
     if (!htmlBlocks.isEmpty()) {
         auto *rawBrowser = new AutoHeightTextBrowser;
         rawBrowser->setObjectName("bubbleText");
-        rawBrowser->setPlainText(content);
+        rawBrowser->setMarkdownWithHtmlBlocks(content, isDark, /*renderHtmlBlocksLive=*/false);
         rawBrowser->setVisible(false);
         bubbleLayout->insertWidget(bubbleLayout->indexOf(browser) + 1, rawBrowser);
 

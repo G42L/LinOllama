@@ -134,7 +134,7 @@ QString bodyInnerHtml(const QString &fullHtml)
 // all: it's rendered as live content (a chart, a table), not shown as
 // source text there's any point copying.
 QString convertMarkdownWithCodeBlocks(const QString &content, const QFont &font, bool dark,
-                                       QVector<QString> *codeBlockTexts)
+                                       QVector<QString> *codeBlockTexts, bool renderHtmlBlocksLive = true)
 {
     const QRegularExpression &fence = codeFencePattern();
 
@@ -178,7 +178,7 @@ QString convertMarkdownWithCodeBlocks(const QString &content, const QFont &font,
 
         const QString language = match.captured(1).trimmed();
         const QString code = match.captured(2);
-        if (language.compare(QLatin1String("html"), Qt::CaseInsensitive) == 0) {
+        if (renderHtmlBlocksLive && language.compare(QLatin1String("html"), Qt::CaseInsensitive) == 0) {
             result += wrapRawSvgAsImages(code);
         } else {
             // <pre> doesn't collapse whitespace (confirmed — indentation
@@ -564,14 +564,14 @@ AutoHeightTextBrowser::AutoHeightTextBrowser(QWidget *parent)
             this, &AutoHeightTextBrowser::adjustHeight);
 }
 
-void AutoHeightTextBrowser::setMarkdownWithHtmlBlocks(const QString &content, bool dark)
+void AutoHeightTextBrowser::setMarkdownWithHtmlBlocks(const QString &content, bool dark, bool renderHtmlBlocksLive)
 {
     ensurePolished(); // font() below must reflect the actual QSS-applied font, not the pre-stylesheet default
     const QFont ownFont = font();
     const QString sanitized = sanitizeLatexMath(content);
 
     m_codeBlockTexts.clear();
-    const QString html = convertMarkdownWithCodeBlocks(sanitized, ownFont, dark, &m_codeBlockTexts);
+    const QString html = convertMarkdownWithCodeBlocks(sanitized, ownFont, dark, &m_codeBlockTexts, renderHtmlBlocksLive);
 
     // Emoji substitution happens here, on the final HTML, and only here —
     // see substituteEmojiInHtml() for why doing it on the Markdown source

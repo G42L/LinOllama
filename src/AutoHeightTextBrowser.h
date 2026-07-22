@@ -48,7 +48,17 @@ public:
     // runs for a message still actively streaming in, where the live
     // preview stays static until the reply finishes and gets re-rendered
     // through HtmlEmbedWidget. MapEmbedWidget is the equivalent for ```map.
-    void setMarkdownWithHtmlBlocks(const QString &content, bool dark);
+    //
+    // `renderHtmlBlocksLive` controls how a ```html fence is treated when it
+    // *does* reach here (default true, matching the streaming-preview
+    // behavior above): live-injected raw markup when true, or syntax-
+    // highlighted as HTML source (same as any other language) when false —
+    // used by ChatWidget's raw/source-view toggle, so "View source" shows a
+    // properly formatted (highlighted, emoji-substituted) code listing for
+    // the ```html block instead of a second live Chromium rendering (which
+    // has its own DOM, not ours, so it never gets our highlighting/emoji
+    // treatment anyway — that gap is exactly what the source view is for).
+    void setMarkdownWithHtmlBlocks(const QString &content, bool dark, bool renderHtmlBlocksLive = true);
 
     // Renders `content` literally — no Markdown interpretation — while still
     // substituting recognized emoji characters for the bundled Noto Emoji
