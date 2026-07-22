@@ -15,5 +15,6 @@
         <file>icons/expand.svg</file>
         <file>icons/contract.svg</file>
         <file>icons/dropdown-arrow.svg</file>
+        <file>icons/copy.svg</file>
     </qresource>
 </RCC>

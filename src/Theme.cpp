@@ -8,6 +8,7 @@
 #include <QSettings>
 #include <QColor>
 #include <QRegularExpression>
+#include <QBuffer>
 
 namespace {
 
@@ -362,7 +363,8 @@ QSlider#meterSmoothingSlider::groove:horizontal,
 QSlider#paragraphSpacingSlider::groove:horizontal,
 QSlider#listItemSpacingSlider::groove:horizontal,
 QSlider#headingSpacingBeforeSlider::groove:horizontal,
-QSlider#fontScaleSlider::groove:horizontal {
+QSlider#fontScaleSlider::groove:horizontal,
+QSlider#copyIconSizeSlider::groove:horizontal {
     background-color: {{progressTrack}};
     height: 6px;
     border-radius: 3px;
@@ -373,7 +375,8 @@ QSlider#meterSmoothingSlider::sub-page:horizontal,
 QSlider#paragraphSpacingSlider::sub-page:horizontal,
 QSlider#listItemSpacingSlider::sub-page:horizontal,
 QSlider#headingSpacingBeforeSlider::sub-page:horizontal,
-QSlider#fontScaleSlider::sub-page:horizontal {
+QSlider#fontScaleSlider::sub-page:horizontal,
+QSlider#copyIconSizeSlider::sub-page:horizontal {
     background-color: {{accent}};
     height: 6px;
     border-radius: 3px;
@@ -384,7 +387,8 @@ QSlider#meterSmoothingSlider::handle:horizontal,
 QSlider#paragraphSpacingSlider::handle:horizontal,
 QSlider#listItemSpacingSlider::handle:horizontal,
 QSlider#headingSpacingBeforeSlider::handle:horizontal,
-QSlider#fontScaleSlider::handle:horizontal {
+QSlider#fontScaleSlider::handle:horizontal,
+QSlider#copyIconSizeSlider::handle:horizontal {
     background-color: {{accent}};
     width: 14px;
     height: 14px;
@@ -974,6 +978,20 @@ QIcon Theme::loadThemedIconMultiSize(const QString &resourcePath, bool dark, con
             icon.addPixmap(single.pixmap(sizePx, sizePx));
     }
     return icon;
+}
+
+QString Theme::themedIconDataUri(const QString &resourcePath, bool dark, int sizePx,
+                                  const QString &colorTokenName)
+{
+    const QIcon icon = loadThemedIcon(resourcePath, dark, sizePx, colorTokenName);
+    if (icon.isNull())
+        return QString();
+
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    icon.pixmap(sizePx, sizePx).save(&buffer, "PNG");
+    return QStringLiteral("data:image/png;base64,%1").arg(QString::fromLatin1(bytes.toBase64()));
 }
 
 int Theme::scaledPixelSize(int basePx)

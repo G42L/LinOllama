@@ -72,6 +72,16 @@ QIcon loadThemedIcon(const QString &resourcePath, bool dark, int sizePx = 16,
 QIcon loadThemedIconMultiSize(const QString &resourcePath, bool dark, const QVector<int> &sizesPx,
                                const QString &colorTokenName = QStringLiteral("secondaryText"));
 
+// Same recoloring/rasterizing as loadThemedIcon(), but returns a
+// "data:image/png;base64,..." string instead of a QIcon — for embedding an
+// icon inside rich text (an <img src="..."> in a QTextDocument), which has
+// no way to reference a QIcon directly and can't use a qrc path either
+// (the icon needs per-theme recoloring first, so there's no single static
+// resource to point at). Returns an empty string on the same failure cases
+// loadThemedIcon() returns a null QIcon for.
+QString themedIconDataUri(const QString &resourcePath, bool dark, int sizePx,
+                           const QString &colorTokenName = QStringLiteral("secondaryText"));
+
 // Multiplies `basePx` by the current "appearance/fontScale" setting (see
 // applyFontScale() in Theme.cpp, which does the same for every QSS
 // font-size) — for toolbar icon sizes, which aren't part of the stylesheet

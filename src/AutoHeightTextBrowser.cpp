@@ -24,6 +24,7 @@
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QDesktopServices>
+#include <QTimer>
 
 namespace {
 
@@ -147,6 +148,19 @@ QString convertMarkdownWithCodeBlocks(const QString &content, const QFont &font,
     const QString codeBg = Theme::colorToken(QStringLiteral("codeBg"), dark);
     const QString linkColor = Theme::colorToken(QStringLiteral("secondaryText"), dark);
     const int linkPx = qMax(1, qRound(QFontInfo(font).pixelSize() * 0.85));
+    // A fixed size from Settings > Formatting rather than scaled off the
+    // surrounding text (like the spacing settings there, and unlike linkPx
+    // above) — it's an icon, not text, so it doesn't need to track the
+    // font-size slider the same way. Deliberately bigger than the header
+    // line's own text by default — a small icon matched to text size read
+    // as fussy/hard to hit; letting it overhang the line it's on is fine,
+    // Qt just grows that line's own height to fit rather than clipping or
+    // overlapping the block below (verified directly).
+    const int copyIconPx = QSettings().value(QStringLiteral("formatting/copyIconSize"), 16).toInt();
+    // Computed once — every code block in this message shares the same
+    // theme/size, so there's no reason to re-rasterize the icon per block.
+    const QString copyIconUri = Theme::themedIconDataUri(QStringLiteral(":/icons/copy.svg"), dark, copyIconPx,
+                                                           QStringLiteral("secondaryText"));
 
     QString result;
     int lastEnd = 0;
@@ -167,12 +181,54 @@ QString convertMarkdownWithCodeBlocks(const QString &content, const QFont &font,
         if (language.compare(QLatin1String("html"), Qt::CaseInsensitive) == 0) {
             result += wrapRawSvgAsImages(code);
         } else {
-            const QString highlighted = CodeHighlighter::highlightToHtml(code, language, dark);
+            // <pre> doesn't collapse whitespace (confirmed — indentation
+            // survives correctly already), so a plain trailing space per
+            // source line gives a right inset approximating the 6px CSS
+            // padding Qt's rich-text engine won't honor on <pre> itself.
+            // Right only, deliberately not left: this widget still allows
+            // selecting/copying text directly (TextSelectableByMouse), not
+            // just via the Copy icon, and a *leading* space on every line
+            // would get dragged into that selection too — for
+            // indentation-sensitive code (Python, YAML), that silently
+            // corrupts it on paste. A trailing space is comparatively
+            // harmless if it ends up in a manual copy. Applied to a
+            // separate copy fed to the highlighter — codeBlockTexts below
+            // still gets the real, unpadded `code`, so the Copy button
+            // never copies these extra spaces either way.
+            QStringList paddedLines = code.split(QLatin1Char('\n'));
+            for (QString &line : paddedLines)
+                line = line + QLatin1Char(' ');
+            const QString highlighted = CodeHighlighter::highlightToHtml(
+                paddedLines.join(QLatin1Char('\n')), language, dark);
+            // The language label and Copy link both get the same
+            // background-color as the code itself — that's what makes
+            // applyBlockSpacing() treat them as part of the same code block
+            // (it detects "is this line part of a code block" purely from
+            // whether the block carries that background brush, verified
+            // directly) and collapse the gaps between them, so the whole
+            // thing reads as one continuous panel instead of three stacked
+            // ones. No language tag on the fence — just skip that label
+            // instead of showing an empty one. Flush left, matching the
+            // code below (which is deliberately not left-inset either —
+            // see the comment on paddedLines above).
+            if (!language.isEmpty()) {
+                result += QStringLiteral("<div style=\"background-color:%1; color:%2; font-size:%3px;\">%4</div>")
+                    .arg(codeBg).arg(linkColor).arg(linkPx).arg(language.toHtmlEscaped());
+            }
+            // Qt's rich-text CSS doesn't honor margin/padding on an inline
+            // <img> (verified: silently dropped, same as the <pre> padding
+            // limitation found earlier) — trailing &nbsp;s after the icon,
+            // inside this same right-aligned div, push it left of the true
+            // right edge instead, leaving visible space to its right.
             result += QStringLiteral(
-                "<div style=\"text-align:right;\"><a href=\"copycode:%1\" "
-                "style=\"color:%2; text-decoration:none; font-size:%3px;\">Copy</a></div>"
-                "<pre style=\"background-color:%4; font-family:'Monospace';\">%5</pre>")
-                .arg(codeBlockTexts->size()).arg(linkColor).arg(linkPx).arg(codeBg, highlighted);
+                "<div style=\"background-color:%1; text-align:right;\"><a href=\"copycode:%2\" "
+                "style=\"text-decoration:none;\"><img src=\"%3\" width=\"%4\" height=\"%4\" "
+                "style=\"vertical-align:middle;\"></a>&nbsp;&nbsp;&nbsp;</div>"
+                "<pre style=\"background-color:%1; font-family:'Monospace';\">%5</pre>")
+                .arg(codeBg).arg(codeBlockTexts->size()).arg(copyIconUri).arg(copyIconPx).arg(highlighted);
+            // Only the actual source goes on the clipboard — the language
+            // label and Copy link above are display-only, never part of
+            // what gets copied.
             codeBlockTexts->append(code);
         }
         lastEnd = match.capturedEnd();
@@ -634,6 +690,19 @@ void AutoHeightTextBrowser::onAnchorClicked(const QUrl &url)
         const int index = url.path().toInt(&ok);
         if (ok && index >= 0 && index < m_codeBlockTexts.size())
             QGuiApplication::clipboard()->setText(m_codeBlockTexts.at(index));
+
+        // TextSelectableByMouse (needed so replies can be selected/copied
+        // normally) also leaves the just-clicked icon looking "selected"
+        // (highlighted) afterward — clicking a Copy icon is an action, not
+        // text selection, so that highlight shouldn't stick around.
+        // Deferred to the next event-loop turn, not done inline here, in
+        // case QTextBrowser's own click handling sets the selection *after*
+        // emitting this signal rather than before.
+        QTimer::singleShot(0, this, [this]() {
+            QTextCursor cursor = textCursor();
+            cursor.clearSelection();
+            setTextCursor(cursor);
+        });
         return;
     }
     // Replicates what setOpenExternalLinks(true) used to do automatically —

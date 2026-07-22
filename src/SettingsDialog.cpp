@@ -492,6 +492,17 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
         "Heading spacing (before)", "formatting/headingSpacingBefore", 0, 60, 18));
 
     formattingPageLayout->addWidget(spacingGroup);
+
+    // Controls the Copy icon shown above a syntax-highlighted code block
+    // (see AutoHeightTextBrowser::convertMarkdownWithCodeBlocks()) — a fixed
+    // size like the spacing settings above, not scaled by the font-size
+    // slider, since it's an icon rather than text.
+    auto *codeBlockGroup = new QGroupBox("Code blocks");
+    auto *codeBlockLayout = new QVBoxLayout(codeBlockGroup);
+    codeBlockLayout->addWidget(makeSpacingSliderRow(
+        "Copy icon size", "formatting/copyIconSize", 12, 32, 16));
+    formattingPageLayout->addWidget(codeBlockGroup);
+
     formattingPageLayout->addStretch();
 
     // --- Ollama tab: Model ---------------------------------------------------
