@@ -13,6 +13,8 @@
 #include <QScrollArea>
 #include <QMessageBox>
 #include <QWidgetAction>
+#include <QInputDialog>
+#include <QLineEdit>
 #include <QWebEngineView>
 #include <QFileDialog>
 #include <QStandardPaths>
@@ -118,6 +120,8 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
             this, &MainWindow::onSidebarSelectionChanged);
     connect(m_sidebarList, &QListWidget::customContextMenuRequested,
             this, &MainWindow::onSidebarContextMenuRequested);
+    connect(m_sidebarList, &QListWidget::itemDoubleClicked,
+            this, &MainWindow::onSidebarItemDoubleClicked);
     m_sidebarList->installEventFilter(this); // keeps row widths in sync on resize — see updateSidebarItemWidths()
     sidebarLayout->addWidget(m_sidebarList, /*stretch=*/1);
 
@@ -443,12 +447,31 @@ void MainWindow::onSidebarContextMenuRequested(const QPoint &pos)
     const Conversation *conv = m_store->find(id);
     const QString title = conv ? conv->title : QString();
 
-    QMenu *menu = buildDeleteMenu(id, title);
+    QMenu *menu = buildConversationContextMenu(id, title);
     menu->exec(m_sidebarList->viewport()->mapToGlobal(pos));
     menu->deleteLater();
 }
 
-QMenu *MainWindow::buildDeleteMenu(const QString &conversationId, const QString &title)
+void MainWindow::onSidebarItemDoubleClicked(QListWidgetItem *item)
+{
+    if (!item)
+        return;
+    const QString id = item->data(Qt::UserRole).toString();
+    const Conversation *conv = m_store->find(id);
+    promptRenameConversation(id, conv ? conv->title : QString());
+}
+
+void MainWindow::promptRenameConversation(const QString &conversationId, const QString &currentTitle)
+{
+    bool ok = false;
+    const QString newTitle = QInputDialog::getText(this, "Rename conversation", "Title:",
+                                                     QLineEdit::Normal, currentTitle, &ok).trimmed();
+    if (!ok || newTitle.isEmpty() || newTitle == currentTitle)
+        return;
+    m_store->renameConversation(conversationId, newTitle);
+}
+
+QMenu *MainWindow::buildConversationContextMenu(const QString &conversationId, const QString &title)
 {
     auto *menu = new QMenu(this);
     // Without this, Qt still paints the popup's native window background as
@@ -457,6 +480,11 @@ QMenu *MainWindow::buildDeleteMenu(const QString &conversationId, const QString 
     // past the rounded corners. Translucent background lets the corners
     // outside the rounded rect actually be transparent instead.
     menu->setAttribute(Qt::WA_TranslucentBackground);
+
+    QAction *renameAction = menu->addAction("Rename…");
+    connect(renameAction, &QAction::triggered, this, [this, conversationId, title]() {
+        promptRenameConversation(conversationId, title);
+    });
 
     QAction *exportAction = menu->addAction("Export conversation…");
     connect(exportAction, &QAction::triggered, this, [this, conversationId, title]() {
@@ -564,6 +592,10 @@ void MainWindow::refreshSidebar()
         connect(rowWidget, &ConversationListItemWidget::exportRequested,
                 this, [this, title = conv.title](const QString &id) {
                     exportConversation(id, title);
+                });
+        connect(rowWidget, &ConversationListItemWidget::renameRequested,
+                this, [this, title = conv.title](const QString &id) {
+                    promptRenameConversation(id, title);
                 });
 
         item->setSizeHint(rowWidget->sizeHint());

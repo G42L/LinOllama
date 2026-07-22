@@ -198,7 +198,7 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_toolsButton->setPopupMode(QToolButton::InstantPopup);
 
     auto *toolsMenu = new QMenu(m_toolsButton);
-    // See MainWindow::buildDeleteMenu()'s own comment — avoids a background-
+    // See MainWindow::buildConversationContextMenu()'s own comment — avoids a background-
     // color halo showing past the QSS-rounded corners (Theme.cpp's
     // QMenu { border-radius: 8px; }).
     toolsMenu->setAttribute(Qt::WA_TranslucentBackground);
@@ -1873,9 +1873,9 @@ void ChatWidget::onJumpToClicked()
 
     // Built fresh each click rather than kept around — same one-shot popup
     // pattern MainWindow uses for its own context menus (see
-    // MainWindow::buildDeleteMenu).
+    // MainWindow::buildConversationContextMenu).
     QMenu menu(this);
-    // See MainWindow::buildDeleteMenu()'s own comment.
+    // See MainWindow::buildConversationContextMenu()'s own comment.
     menu.setAttribute(Qt::WA_TranslucentBackground);
     for (const UserMessageMarker &marker : m_userMessageMarkers) {
         QAction *action = menu.addAction(marker.preview);

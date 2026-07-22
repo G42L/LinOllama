@@ -59,6 +59,10 @@ private slots:
     void onConversationTitleMayHaveChanged(const QString &conversationId);
     void onChatConversationCreated(const QString &conversationId);
     void onSidebarContextMenuRequested(const QPoint &pos);
+    // Double-clicking a sidebar row is a third entry point into the same
+    // rename flow as the context menu's "Rename…" and the row's own "⋮"
+    // menu — see promptRenameConversation().
+    void onSidebarItemDoubleClicked(QListWidgetItem *item);
     void onSettingsRequested();
     // Re-derives the window icon (black on light, white-ish on dark — see
     // Theme::loadThemedIconMultiSize) whenever the theme actually flips.
@@ -106,11 +110,19 @@ private:
     // ChatWidget::setActiveConversation().
     void selectSidebarRow(const QString &id);
 
-    // Builds a one-shot popup menu offering "Export conversation…" and
-    // "Delete chat" (the latter in red text, see Theme.cpp's
-    // #deleteMenuItem rule) for the given conversation. Caller owns the
-    // returned menu and should deleteLater() it after exec().
-    QMenu *buildDeleteMenu(const QString &conversationId, const QString &title);
+    // Builds a one-shot popup menu offering "Rename…", "Export
+    // conversation…", and "Delete chat" (the latter in red text, see
+    // Theme.cpp's #deleteMenuItem rule) for the given conversation. Caller
+    // owns the returned menu and should deleteLater() it after exec().
+    QMenu *buildConversationContextMenu(const QString &conversationId, const QString &title);
+
+    // Shared by all three rename entry points (sidebar right-click menu,
+    // each row's own "⋮" menu, and double-clicking a row) — prompts with
+    // the conversation's current title pre-filled, and if a non-empty,
+    // actually-changed title is given, persists it via
+    // ConversationStore::renameConversation(), which itself emits
+    // conversationListChanged() to refresh the sidebar.
+    void promptRenameConversation(const QString &conversationId, const QString &currentTitle);
 
     // Shows a confirmation dialog (red "Delete" button) and, only if
     // confirmed, deletes the conversation — clearing the active chat first

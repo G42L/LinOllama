@@ -41,10 +41,15 @@ ConversationListItemWidget::ConversationListItemWidget(const QString &conversati
 
     connect(m_menuButton, &QToolButton::clicked, this, [this]() {
         auto *menu = new QMenu(this);
-        // See MainWindow::buildDeleteMenu()'s own comment — same rounded-
+        // See MainWindow::buildConversationContextMenu()'s own comment — same rounded-
         // corner background-halo fix, needed at every QMenu construction
         // site individually since it's a per-window attribute.
         menu->setAttribute(Qt::WA_TranslucentBackground);
+
+        QAction *renameAction = menu->addAction("Rename…");
+        connect(renameAction, &QAction::triggered, this, [this]() {
+            emit renameRequested(m_conversationId);
+        });
 
         QAction *exportAction = menu->addAction("Export conversation…");
         connect(exportAction, &QAction::triggered, this, [this]() {

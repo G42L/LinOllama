@@ -25,6 +25,7 @@ public:
 signals:
     void deleteRequested(const QString &conversationId);
     void exportRequested(const QString &conversationId);
+    void renameRequested(const QString &conversationId);
 
 protected:
     void enterEvent(QEnterEvent *event) override;
