@@ -28,6 +28,7 @@
 #include <QMediaDevices>
 #include <QAudioDevice>
 #include <QSignalBlocker>
+#include <QTimer>
 #include <QTabWidget>
 #include <QScrollArea>
 #include <QLineEdit>
@@ -1323,8 +1324,12 @@ void SettingsDialog::onModelUnloaded(const QString &model, bool success)
     Q_UNUSED(model);
     Q_UNUSED(success);
     // Whatever just changed, the loaded-model list is now stale either way —
-    // simplest correct behavior is just to re-fetch it.
-    refreshLoadedModels();
+    // simplest correct behavior is just to re-fetch it. Ollama's /api/ps can
+    // still report the model as loaded for a brief moment after the unload
+    // request's HTTP response comes back, so an immediate re-fetch here
+    // would just redraw the stale state; give the server a moment to
+    // actually evict it first.
+    QTimer::singleShot(500, this, &SettingsDialog::refreshLoadedModels);
 }
 
 void SettingsDialog::clearLoadedModelsList()

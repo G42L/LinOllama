@@ -256,6 +256,15 @@ void TrayApplication::onModelUnloaded(const QString &model, bool success)
         success ? QString("Offloaded model: %1").arg(model)
                 : QString("Failed to offload model: %1").arg(model),
         success ? QSystemTrayIcon::Information : QSystemTrayIcon::Warning, 3000);
+
+    // The "Offload model" submenu was already open (that's how this model
+    // just got triggered), so it needs its own refresh here rather than
+    // relying on the next aboutToShow — same delay as
+    // SettingsDialog::onModelUnloaded, since /api/ps can still report the
+    // model as loaded for a moment right after the unload request returns.
+    QTimer::singleShot(500, this, [this]() {
+        m_ollamaClient->fetchLoadedModels();
+    });
 }
 
 QString TrayApplication::modeLabel(ServerController::RunMode mode)
