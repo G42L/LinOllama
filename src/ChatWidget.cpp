@@ -27,6 +27,7 @@
 #include <QTextCursor>
 #include <QDebug>
 #include <QMessageBox>
+#include <QSignalBlocker>
 
 ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
                        WhisperManager *whisperManager, QWidget *parent)
@@ -600,13 +601,26 @@ void ChatWidget::updateEmptyStateInputWidth()
 
 void ChatWidget::clearMessages()
 {
+    // Each removed row's own deferred deletion is flushed individually
+    // below (not via a single sendPostedEvents(nullptr, ...) covering the
+    // whole app) — a message bubble can contain an HtmlEmbedWidget
+    // (QWebEngineView/QWebEnginePage), and forcing *every* pending deferred
+    // deletion across the entire application to run right now, rather than
+    // just these rows', risked tearing down some unrelated in-flight
+    // WebEngine page at a moment its own async callbacks (e.g.
+    // updateHeightFromContent()'s runJavaScript() height measurement)
+    // didn't expect, which was the likely cause of an html-rendered
+    // block's height occasionally growing without ever settling.
+    QVector<QPointer<QWidget>> removedWidgets;
     // Index 0 is always the earliest remaining message row while the
     // trailing stretch (added once, in the constructor) sits last — so
     // repeatedly popping the front leaves just the stretch behind.
     while (m_messagesLayout->count() > 1) {
         QLayoutItem *item = m_messagesLayout->takeAt(0);
-        if (item->widget())
-            item->widget()->deleteLater();
+        if (QWidget *widget = item->widget()) {
+            widget->deleteLater();
+            removedWidgets.append(widget);
+        }
         delete item;
     }
     // The rows just queued for deletion are what m_userMessageMarkers points
@@ -621,8 +635,12 @@ void ChatWidget::clearMessages()
     // until the event loop eventually got around to the deferred deletion.
     // Most visible with a font-scale change: shrinking back down left the
     // previous, taller bubbles lingering underneath, showing as empty space
-    // where they used to be. Flushing immediately closes that gap.
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    // where they used to be. Flushing immediately closes that gap — scoped
+    // to just these specific widgets, per the comment above.
+    for (const QPointer<QWidget> &widget : removedWidgets) {
+        if (widget)
+            QCoreApplication::sendPostedEvents(widget, QEvent::DeferredDelete);
+    }
 }
 
 void ChatWidget::renderConversation()
@@ -1035,6 +1053,41 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
     // when there's nothing left for it to find.
     browser->setMarkdownWithHtmlBlocks(textOnly, m_themeManager && m_themeManager->isDarkActive());
 
+    // Builds one "View source" toggle row — there are two of these (one
+    // right above the rendered HTML, one right below it), kept in sync with
+    // each other via the connections below, so either one is reachable
+    // without having to scroll past a long rendering to find the other.
+    const bool isDark = m_themeManager && m_themeManager->isDarkActive();
+    const int toggleIconPx = Theme::scaledPixelSize(14);
+    const QIcon sourceCodeIcon = Theme::loadThemedIcon(":/icons/source-code.svg", isDark, toggleIconPx);
+    const QIcon renderedIcon = Theme::loadThemedIcon(":/icons/webpack.svg", isDark, toggleIconPx);
+    auto makeToggleButton = [toggleIconPx, sourceCodeIcon]() {
+        auto *row = new QWidget;
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 4, 0, 4);
+        rowLayout->addStretch(1);
+        auto *button = new QToolButton;
+        button->setObjectName("htmlRawToggleButton");
+        button->setText("View source");
+        button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        button->setIcon(sourceCodeIcon);
+        button->setIconSize(QSize(toggleIconPx, toggleIconPx));
+        button->setCheckable(true);
+        button->setCursor(Qt::PointingHandCursor);
+        button->setAutoRaise(true);
+        rowLayout->addWidget(button);
+        return qMakePair(row, button);
+    };
+
+    QWidget *topToggleRow = nullptr;
+    QToolButton *topToggleButton = nullptr;
+    if (!htmlBlocks.isEmpty()) {
+        const auto pair = makeToggleButton();
+        topToggleRow = pair.first;
+        topToggleButton = pair.second;
+        bubbleLayout->addWidget(topToggleRow); // right above the html embeds added just below
+    }
+
     QVector<QWidget *> htmlWidgets;
     htmlWidgets.reserve(htmlBlocks.size());
     for (const QString &html : htmlBlocks) {
@@ -1083,28 +1136,38 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
         rawBrowser->setVisible(false);
         bubbleLayout->insertWidget(bubbleLayout->indexOf(browser) + 1, rawBrowser);
 
-        auto *toggleRow = new QWidget;
-        auto *toggleLayout = new QHBoxLayout(toggleRow);
-        toggleLayout->setContentsMargins(0, 4, 0, 0);
-        toggleLayout->addStretch(1);
+        const auto bottomPair = makeToggleButton();
+        QWidget *bottomToggleRow = bottomPair.first;
+        QToolButton *bottomToggleButton = bottomPair.second;
+        bubbleLayout->addWidget(bottomToggleRow);
 
-        auto *toggleButton = new QToolButton;
-        toggleButton->setObjectName("htmlRawToggleButton");
-        toggleButton->setText("View source");
-        toggleButton->setCheckable(true);
-        toggleButton->setCursor(Qt::PointingHandCursor);
-        toggleButton->setAutoRaise(true);
-        connect(toggleButton, &QToolButton::toggled, browser,
-                [browser, rawBrowser, htmlWidgets, toggleButton](bool showRaw) {
+        // Both buttons drive the same shown/hidden state and stay in sync
+        // with each other — QSignalBlocker on the *other* button when
+        // reacting to one's toggle stops that sync update from re-emitting
+        // toggled() right back at the button that just changed.
+        auto applyState = [browser, rawBrowser, htmlWidgets, topToggleButton, bottomToggleButton,
+                            sourceCodeIcon, renderedIcon](bool showRaw) {
             browser->setVisible(!showRaw);
             for (QWidget *w : htmlWidgets)
                 w->setVisible(!showRaw);
             rawBrowser->setVisible(showRaw);
-            toggleButton->setText(showRaw ? "View rendered" : "View source");
+            const QString label = showRaw ? "View rendered" : "View source";
+            const QIcon &icon = showRaw ? renderedIcon : sourceCodeIcon;
+            topToggleButton->setText(label);
+            topToggleButton->setIcon(icon);
+            bottomToggleButton->setText(label);
+            bottomToggleButton->setIcon(icon);
+        };
+        connect(topToggleButton, &QToolButton::toggled, browser, [bottomToggleButton, applyState](bool showRaw) {
+            const QSignalBlocker blocker(bottomToggleButton);
+            bottomToggleButton->setChecked(showRaw);
+            applyState(showRaw);
         });
-        toggleLayout->addWidget(toggleButton);
-
-        bubbleLayout->addWidget(toggleRow);
+        connect(bottomToggleButton, &QToolButton::toggled, browser, [topToggleButton, applyState](bool showRaw) {
+            const QSignalBlocker blocker(topToggleButton);
+            topToggleButton->setChecked(showRaw);
+            applyState(showRaw);
+        });
     }
 }
 

@@ -16,5 +16,7 @@
         <file>icons/contract.svg</file>
         <file>icons/dropdown-arrow.svg</file>
         <file>icons/copy.svg</file>
+        <file>icons/source-code.svg</file>
+        <file>icons/webpack.svg</file>
     </qresource>
 </RCC>

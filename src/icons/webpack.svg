@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+
+<svg
+   width="800px"
+   height="800px"
+   viewBox="0 0 15 15"
+   fill="none"
+   version="1.1"
+   id="svg4"
+   sodipodi:docname="webpack.svg"
+   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs8" />
+  <sodipodi:namedview
+     id="namedview6"
+     pagecolor="#ffffff"
+     bordercolor="{{iconColor}}"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="1.28375"
+     inkscape:cx="401.55794"
+     inkscape:cy="402.3369"
+     inkscape:window-width="3072"
+     inkscape:window-height="1587"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg4" />
+  <path
+     d="M1.5 10.5V4.5M1.5 10.5L7.5 14M1.5 10.5L5 9M1.5 4.5L7.5 1M1.5 4.5L7.5 7.5M7.5 1L13.5 4.5M7.5 1V4.5M13.5 4.5V10.5M13.5 4.5L7.5 7.5M13.5 10.5L7.5 14M13.5 10.5L10 9M7.5 14V7.5M7.5 4.5L5 6V9M7.5 4.5L10 6V9M5 9L7.5 10.5L10 9"
+     stroke="{{iconColor}}"
+     id="path2"
+     style="stroke-width:1.40625;stroke-dasharray:none" />
+</svg>

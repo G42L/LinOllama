@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+
+<svg
+   width="800px"
+   height="800px"
+   viewBox="0 0 21 21"
+   version="1.1"
+   id="svg10"
+   sodipodi:docname="source-code.svg"
+   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs14" />
+  <sodipodi:namedview
+     id="namedview12"
+     pagecolor="#ffffff"
+     bordercolor="{{iconColor}}"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="1.28375"
+     inkscape:cx="402.3369"
+     inkscape:cy="402.3369"
+     inkscape:window-width="3072"
+     inkscape:window-height="1587"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg10" />
+  <g
+     fill="none"
+     fill-rule="evenodd"
+     stroke="{{iconColor}}"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     transform="translate(2 3)"
+     id="g8"
+     style="stroke-width:1.96875;stroke-dasharray:none">
+    <line
+       x1="10.5"
+       x2="6.5"
+       y1=".5"
+       y2="14.5"
+       id="line2"
+       style="stroke-width:1.96875;stroke-dasharray:none" />
+    <polyline
+       points="7.328 2.672 7.328 8.328 1.672 8.328"
+       transform="rotate(135 4.5 5.5)"
+       id="polyline4"
+       style="stroke-width:1.96875;stroke-dasharray:none" />
+    <polyline
+       points="15.328 6.672 15.328 12.328 9.672 12.328"
+       transform="scale(1 -1) rotate(-45 -10.435 0)"
+       id="polyline6"
+       style="stroke-width:1.96875;stroke-dasharray:none" />
+  </g>
+</svg>

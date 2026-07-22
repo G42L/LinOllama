@@ -30,6 +30,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include <QCoreApplication>
+#include <QPointer>
 #include <QTabWidget>
 #include <limits>
 #include <QScrollArea>
@@ -1508,10 +1509,13 @@ void SettingsDialog::onModelUnloaded(const QString &model, bool success)
 
 void SettingsDialog::clearLoadedModelsList()
 {
+    QVector<QPointer<QWidget>> removedWidgets;
     QLayoutItem *item;
     while ((item = m_loadedModelsLayout->takeAt(0)) != nullptr) {
-        if (item->widget())
-            item->widget()->deleteLater();
+        if (QWidget *widget = item->widget()) {
+            widget->deleteLater();
+            removedWidgets.append(widget);
+        }
         delete item;
     }
     m_loadedModelsStatusLabel = nullptr;
@@ -1522,8 +1526,15 @@ void SettingsDialog::clearLoadedModelsList()
     // "Offload" button (still alive, just no longer in the layout) would
     // keep showing up alongside the new content until the event loop
     // eventually got around to the deferred deletion — the same "ghost
-    // widget" bug ChatWidget::clearMessages() had for chat bubbles.
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    // widget" bug ChatWidget::clearMessages() had for chat bubbles. Scoped
+    // to just these specific widgets (not sendPostedEvents(nullptr, ...),
+    // which would force *every* pending deferred deletion in the whole app
+    // to run right now) — see that function's own comment for why a broad
+    // flush like that turned out to be risky elsewhere.
+    for (const QPointer<QWidget> &widget : removedWidgets) {
+        if (widget)
+            QCoreApplication::sendPostedEvents(widget, QEvent::DeferredDelete);
+    }
 }
 
 void SettingsDialog::rebuildLoadedModelsList(const QVector<LoadedModelInfo> &models)
@@ -1944,17 +1955,24 @@ void SettingsDialog::onInstalledModelsListed(const QStringList &modelNames)
 
 void SettingsDialog::clearInstalledModelsList()
 {
+    QVector<QPointer<QWidget>> removedWidgets;
     QLayoutItem *item;
     while ((item = m_installedModelsLayout->takeAt(0)) != nullptr) {
-        if (item->widget())
-            item->widget()->deleteLater();
+        if (QWidget *widget = item->widget()) {
+            widget->deleteLater();
+            removedWidgets.append(widget);
+        }
         delete item;
     }
     m_installedModelsStatusLabel = nullptr;
 
-    // Same reasoning as clearLoadedModelsList() — flush immediately so a
-    // previous row doesn't linger as a "ghost" widget alongside the new one.
-    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    // Same reasoning as clearLoadedModelsList() — flush immediately (scoped
+    // to just these widgets) so a previous row doesn't linger as a "ghost"
+    // widget alongside the new one.
+    for (const QPointer<QWidget> &widget : removedWidgets) {
+        if (widget)
+            QCoreApplication::sendPostedEvents(widget, QEvent::DeferredDelete);
+    }
 }
 
 void SettingsDialog::rebuildInstalledModelsList(const QStringList &modelNames)
