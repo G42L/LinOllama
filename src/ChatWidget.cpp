@@ -353,8 +353,15 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     connect(m_chatQueue, &ChatQueue::turnStarted, this, &ChatWidget::onQueueTurnStarted);
     connect(m_chatQueue, &ChatQueue::queuePositionChanged, this, &ChatWidget::onQueuePositionChanged);
 
-    if (m_themeManager)
+    if (m_themeManager) {
         connect(m_themeManager, &ThemeManager::themeChanged, this, &ChatWidget::reloadThemedIcons);
+        // Fenced-code-block syntax colors (see AutoHeightTextBrowser::
+        // setMarkdownWithHtmlBlocks()'s `dark` parameter) are baked into
+        // each message's rendered HTML at render time, same as the
+        // font-scale/spacing settings — a light/dark toggle alone doesn't
+        // retouch anything already on screen without this.
+        connect(m_themeManager, &ThemeManager::themeChanged, this, &ChatWidget::refreshFormattingSettings);
+    }
     reloadThemedIcons();
 
     setActiveConversation(QString()); // start in the empty state
@@ -782,7 +789,8 @@ void ChatWidget::reconnectStreamingBubble()
         m_streamingBubbleLayout->insertWidget(0, m_streamingThinkingWidget); // above the answer text
     }
     if (!st.buffer.isEmpty())
-        m_streamingBrowser->setMarkdownWithHtmlBlocks(livePreviewText(st.buffer));
+        m_streamingBrowser->setMarkdownWithHtmlBlocks(livePreviewText(st.buffer),
+                                                       m_themeManager && m_themeManager->isDarkActive());
     else if (m_chatQueue->isQueued(m_activeConversationId))
         onQueuePositionChanged(m_activeConversationId, m_chatQueue->aheadCount(m_activeConversationId));
 }
@@ -1009,12 +1017,13 @@ void ChatWidget::renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLay
     textOnly += withoutHtml.mid(lastEnd);
 
     // No ```html fence survives into textOnly (already extracted above), so
-    // this is effectively plain Markdown rendering now — still routed
-    // through setMarkdownWithHtmlBlocks() rather than setMarkdown() in case
-    // a model ever nests one inside e.g. a code fence in a way the regex
-    // above doesn't catch; harmless either way since it's a no-op when
-    // there's nothing left for it to find.
-    browser->setMarkdownWithHtmlBlocks(textOnly);
+    // this only needs to handle Markdown plus any other fenced code block
+    // (```python, ```bash, etc.) — still routed through
+    // setMarkdownWithHtmlBlocks() rather than setMarkdown() in case a model
+    // ever nests a ```html fence inside e.g. a code fence in a way the
+    // regex above doesn't catch; harmless either way since it's a no-op
+    // when there's nothing left for it to find.
+    browser->setMarkdownWithHtmlBlocks(textOnly, m_themeManager && m_themeManager->isDarkActive());
 
     QVector<QWidget *> htmlWidgets;
     htmlWidgets.reserve(htmlBlocks.size());
@@ -1625,7 +1634,8 @@ void ChatWidget::flushStreamRender()
     // always renders whatever's accumulated as of right now.
     if (m_streamingBrowser) {
         const StreamState &st = m_streams[m_activeConversationId];
-        m_streamingBrowser->setMarkdownWithHtmlBlocks(livePreviewText(st.buffer));
+        m_streamingBrowser->setMarkdownWithHtmlBlocks(livePreviewText(st.buffer),
+                                                       m_themeManager && m_themeManager->isDarkActive());
     }
     scrollToBottom();
     updateContextUsageDisplay();

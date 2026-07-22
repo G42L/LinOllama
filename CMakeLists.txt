@@ -44,6 +44,8 @@ add_executable(linollama
     src/AutoHeightTextBrowser.h
     src/EmojiRenderer.cpp
     src/EmojiRenderer.h
+    src/CodeHighlighter.cpp
+    src/CodeHighlighter.h
     src/ThinkingSectionWidget.cpp
     src/ThinkingSectionWidget.h
     src/ToolCallSectionWidget.cpp

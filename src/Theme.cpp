@@ -794,6 +794,16 @@ const QHash<QString, QString> &tokenTable(bool dark)
         {"menuHoverBg", "#F3F0E8"},
         {"danger", "#D93025"},
         {"dangerHover", "#B7291D"},
+        // Fenced-code-block syntax colors (see CodeHighlighter) — loosely
+        // matched to GitHub Light's own palette, since that's the reference
+        // point most people already recognize.
+        {"codeBg", "#F1EDE3"},
+        {"codeKeyword", "#CF222E"},
+        {"codeString", "#0A3069"},
+        {"codeComment", "#6E7781"},
+        {"codeNumber", "#0550AE"},
+        {"codeTag", "#8250DF"},     // HTML/XML tag names, and function/class names
+        {"codeAttr", "#0550AE"},    // HTML/XML attribute names
         // Same value in both themes on purpose: for icons/text sitting on
         // a filled accent-colored surface (e.g. the send button's icon),
         // which needs to stay high-contrast regardless of light/dark mode
@@ -825,6 +835,14 @@ const QHash<QString, QString> &tokenTable(bool dark)
         {"menuHoverBg", "#332F2B"},
         {"danger", "#E5534B"},
         {"dangerHover", "#C23D35"},
+        // Fenced-code-block syntax colors — loosely matched to GitHub Dark.
+        {"codeBg", "#332F2B"},
+        {"codeKeyword", "#FF7B72"},
+        {"codeString", "#A5D6FF"},
+        {"codeComment", "#8B949E"},
+        {"codeNumber", "#79C0FF"},
+        {"codeTag", "#D2A8FF"},
+        {"codeAttr", "#79C0FF"},
         {"onAccent", "#FFFFFF"},
     };
 

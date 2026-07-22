@@ -1,5 +1,7 @@
 #include "AutoHeightTextBrowser.h"
 #include "EmojiRenderer.h"
+#include "CodeHighlighter.h"
+#include "Theme.h"
 
 #include <QAbstractTextDocumentLayout>
 #include <QTextDocument>
@@ -7,6 +9,7 @@
 #include <QTextCursor>
 #include <QTextFragment>
 #include <QTextBlockFormat>
+#include <QTextFormat>
 #include <QRegularExpression>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -18,6 +21,9 @@
 #include <QStringList>
 #include <QFontInfo>
 #include <QSettings>
+#include <QGuiApplication>
+#include <QClipboard>
+#include <QDesktopServices>
 
 namespace {
 
@@ -54,15 +60,12 @@ QString wrapRawSvgAsImages(const QString &html)
     return result;
 }
 
-// Locates ```html fenced code block(s) in `content` and builds one combined
-// HTML document: text outside a block is converted from Markdown via Qt's
-// own converter (so formatting stays consistent with the rest of the app),
-// text inside a block is spliced in verbatim as real HTML (after
-// wrapRawSvgAsImages()). Returns false (leaving htmlOut untouched) when
-// there's no such block, so the caller can fall back to plain Markdown
-// rendering.
-// Shared with AutoHeightTextBrowser::containsHtmlBlock() below — keep the
-// two in sync if this pattern ever changes.
+// Matches ```html fenced blocks specifically — kept separate from the
+// general code-fence pattern below since ```html is treated as live,
+// renderable content (charts/tables via HtmlEmbedWidget), not a source-code
+// example to display as text. Shared with
+// AutoHeightTextBrowser::containsHtmlBlock(), which decides whether a reply
+// needs the raw/rendered toggle button at all.
 const QRegularExpression &htmlFencePattern()
 {
     static const QRegularExpression htmlFence(
@@ -71,6 +74,49 @@ const QRegularExpression &htmlFencePattern()
     return htmlFence;
 }
 
+// Matches ANY fenced code block, capturing the (possibly empty) language tag
+// separately from its content — a superset of htmlFencePattern() above.
+const QRegularExpression &codeFencePattern()
+{
+    static const QRegularExpression fence(
+        QStringLiteral("```([A-Za-z0-9_+#-]*)[ \\t]*\\n(.*?)```"),
+        QRegularExpression::DotMatchesEverythingOption);
+    return fence;
+}
+
+// QTextDocument::toHtml() always returns a *complete* document (its own
+// <!DOCTYPE>/<html>/<head>/<body> wrapper), never just a fragment. Splicing
+// multiple such documents back-to-back (as convertMarkdownWithCodeBlocks()
+// below does, alternating Markdown-derived segments with real HTML/<pre>
+// blocks) and feeding the concatenation to one setHtml() call confuses Qt's
+// parser: verified directly that a <pre> block placed right after another
+// segment's closing </html> gets its internal line breaks collapsed away
+// (every source line runs together with no separator), even though the
+// exact same <pre> renders correctly when it's the only content in the
+// document. Extracting each segment's own <body>...</body> inner content
+// first — so the final concatenation is one coherent flow of body content,
+// not several nested "documents" glued together — avoids that entirely.
+QString bodyInnerHtml(const QString &fullHtml)
+{
+    const int bodyOpenEnd = fullHtml.indexOf(QLatin1Char('>'), fullHtml.indexOf(QStringLiteral("<body")));
+    const int bodyCloseStart = fullHtml.lastIndexOf(QStringLiteral("</body>"));
+    if (bodyOpenEnd < 0 || bodyCloseStart < 0 || bodyCloseStart <= bodyOpenEnd)
+        return fullHtml; // shouldn't happen for Qt's own toHtml() output — safe fallback either way
+    return fullHtml.mid(bodyOpenEnd + 1, bodyCloseStart - bodyOpenEnd - 1);
+}
+
+// Builds one combined HTML document from `content`: text outside a fenced
+// code block is converted from Markdown via Qt's own converter (so
+// formatting stays consistent with the rest of the app); text inside one is
+// spliced in as real HTML — either live-rendered content for a ```html
+// block (after wrapRawSvgAsImages(), unchanged from before), or a
+// syntax-highlighted <pre> for any other language (see CodeHighlighter).
+// This runs unconditionally now, even with no fence at all present, since
+// Qt's own setMarkdown()/toHtml() for a fenced block discards the language
+// tag entirely and renders every source line as its own separate,
+// uncolored <pre> block (verified directly against Qt) — there's no
+// "acceptable" code-fence handling to fall back to.
+//
 // `font` is the destination widget's own (already-polished) font — each
 // throwaway QTextDocument used here to convert a Markdown segment to HTML
 // starts out with Qt's generic default font, not the browser's actual
@@ -78,16 +124,33 @@ const QRegularExpression &htmlFencePattern()
 // exported HTML as inline styles. Without setting it explicitly, the
 // spliced-in segment would render at the wrong (generic) size once handed
 // back to the real browser's setHtml(), overriding its QSS font-size.
-bool extractHtmlBlocks(const QString &content, QString *htmlOut, const QFont &font)
+//
+// `codeBlockTexts` (cleared first) collects each highlighted block's
+// original, un-highlighted source in order — index N here matches the
+// "copycode:N" href generated for its Copy link, which
+// AutoHeightTextBrowser::onAnchorClicked() resolves back through the
+// widget's own m_codeBlockTexts. A ```html block doesn't get a Copy link at
+// all: it's rendered as live content (a chart, a table), not shown as
+// source text there's any point copying.
+QString convertMarkdownWithCodeBlocks(const QString &content, const QFont &font, bool dark,
+                                       QVector<QString> *codeBlockTexts)
 {
-    const QRegularExpression &htmlFence = htmlFencePattern();
+    const QRegularExpression &fence = codeFencePattern();
 
-    if (!content.contains(htmlFence))
-        return false;
+    if (!content.contains(fence)) {
+        QTextDocument doc;
+        doc.setDefaultFont(font);
+        doc.setMarkdown(content);
+        return doc.toHtml();
+    }
+
+    const QString codeBg = Theme::colorToken(QStringLiteral("codeBg"), dark);
+    const QString linkColor = Theme::colorToken(QStringLiteral("secondaryText"), dark);
+    const int linkPx = qMax(1, qRound(QFontInfo(font).pixelSize() * 0.85));
 
     QString result;
     int lastEnd = 0;
-    QRegularExpressionMatchIterator it = htmlFence.globalMatch(content);
+    QRegularExpressionMatchIterator it = fence.globalMatch(content);
     while (it.hasNext()) {
         const QRegularExpressionMatch match = it.next();
 
@@ -96,10 +159,22 @@ bool extractHtmlBlocks(const QString &content, QString *htmlOut, const QFont &fo
             QTextDocument doc;
             doc.setDefaultFont(font);
             doc.setMarkdown(before);
-            result += doc.toHtml();
+            result += bodyInnerHtml(doc.toHtml());
         }
 
-        result += wrapRawSvgAsImages(match.captured(1));
+        const QString language = match.captured(1).trimmed();
+        const QString code = match.captured(2);
+        if (language.compare(QLatin1String("html"), Qt::CaseInsensitive) == 0) {
+            result += wrapRawSvgAsImages(code);
+        } else {
+            const QString highlighted = CodeHighlighter::highlightToHtml(code, language, dark);
+            result += QStringLiteral(
+                "<div style=\"text-align:right;\"><a href=\"copycode:%1\" "
+                "style=\"color:%2; text-decoration:none; font-size:%3px;\">Copy</a></div>"
+                "<pre style=\"background-color:%4; font-family:'Monospace';\">%5</pre>")
+                .arg(codeBlockTexts->size()).arg(linkColor).arg(linkPx).arg(codeBg, highlighted);
+            codeBlockTexts->append(code);
+        }
         lastEnd = match.capturedEnd();
     }
 
@@ -108,11 +183,10 @@ bool extractHtmlBlocks(const QString &content, QString *htmlOut, const QFont &fo
         QTextDocument doc;
         doc.setDefaultFont(font);
         doc.setMarkdown(after);
-        result += doc.toHtml();
+        result += bodyInnerHtml(doc.toHtml());
     }
 
-    *htmlOut = result;
-    return true;
+    return result;
 }
 
 // LLMs (this Ollama models especially) frequently emit inline LaTeX math
@@ -370,13 +444,33 @@ void applyBlockSpacing(QTextDocument *doc)
     const int listItemSpacing = settings.value("formatting/listItemSpacing", 4).toInt();
     const int headingSpacingBefore = settings.value("formatting/headingSpacingBefore", 18).toInt();
 
+    // Qt splits a multi-line syntax-highlighted code block into one <pre>
+    // per source line (verified directly — there's no way to keep it as a
+    // single block), each still carrying the background brush explicitly
+    // set on that <pre> (also verified) — which is what lets a "line
+    // belongs to a code block" check use that alone, without needing some
+    // other out-of-band marker. Without treating consecutive code lines
+    // specially, the same paragraphSpacing gap applied between two ordinary
+    // paragraphs would separate every single line of the same code block
+    // with visible space, making one intended block look like several
+    // stacked ones instead of a single continuous panel. The gap between
+    // block i and i+1 is controlled by block i's *bottom* margin, so this
+    // has to look ahead at the *next* block to decide whether the current
+    // one is still inside a run of code lines — not at the previous one.
     for (QTextBlock block = doc->begin(); block.isValid(); block = block.next()) {
         QTextBlockFormat fmt = block.blockFormat();
         const bool inList = block.textList() != nullptr;
         const bool isHeading = fmt.headingLevel() > 0;
         const bool isFirstBlock = (block == doc->begin());
+        const bool isCodeLine = fmt.hasProperty(QTextFormat::BackgroundBrush);
+        const QTextBlock nextBlock = block.next();
+        const bool nextIsCodeLine = nextBlock.isValid()
+            && nextBlock.blockFormat().hasProperty(QTextFormat::BackgroundBrush);
+
         fmt.setTopMargin(isHeading && !isFirstBlock ? headingSpacingBefore : 0);
-        fmt.setBottomMargin(inList ? listItemSpacing : paragraphSpacing);
+        fmt.setBottomMargin(isCodeLine && nextIsCodeLine
+                                 ? 0
+                                 : (inList ? listItemSpacing : paragraphSpacing));
         QTextCursor(block).setBlockFormat(fmt);
     }
 }
@@ -389,7 +483,14 @@ AutoHeightTextBrowser::AutoHeightTextBrowser(QWidget *parent)
     setFrameShape(QFrame::NoFrame);
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    setOpenExternalLinks(true); // links in markdown output open in the system browser, not "navigate" inside this widget
+    // Off, not on — a plain http(s) link still opens in the system browser
+    // (see onAnchorClicked()), but Qt's own automatic handling for
+    // setOpenExternalLinks(true) intercepts external links *before*
+    // anchorClicked() ever fires, which would silently swallow this
+    // widget's "copycode:<index>" links (see convertMarkdownWithCodeBlocks())
+    // instead of letting this widget's own handler see them.
+    setOpenExternalLinks(false);
+    connect(this, &QTextBrowser::anchorClicked, this, &AutoHeightTextBrowser::onAnchorClicked);
     setReadOnly(true);
     setTextInteractionFlags(Qt::TextBrowserInteraction | Qt::TextSelectableByMouse);
 
@@ -407,19 +508,14 @@ AutoHeightTextBrowser::AutoHeightTextBrowser(QWidget *parent)
             this, &AutoHeightTextBrowser::adjustHeight);
 }
 
-void AutoHeightTextBrowser::setMarkdownWithHtmlBlocks(const QString &content)
+void AutoHeightTextBrowser::setMarkdownWithHtmlBlocks(const QString &content, bool dark)
 {
     ensurePolished(); // font() below must reflect the actual QSS-applied font, not the pre-stylesheet default
     const QFont ownFont = font();
     const QString sanitized = sanitizeLatexMath(content);
 
-    QString html;
-    if (!extractHtmlBlocks(sanitized, &html, ownFont)) {
-        QTextDocument doc;
-        doc.setDefaultFont(ownFont); // see extractHtmlBlocks() for why this matters
-        doc.setMarkdown(sanitized);
-        html = doc.toHtml();
-    }
+    m_codeBlockTexts.clear();
+    const QString html = convertMarkdownWithCodeBlocks(sanitized, ownFont, dark, &m_codeBlockTexts);
 
     // Emoji substitution happens here, on the final HTML, and only here —
     // see substituteEmojiInHtml() for why doing it on the Markdown source
@@ -529,6 +625,28 @@ QMimeData *AutoHeightTextBrowser::createMimeDataFromSelection() const
     }
     mime->setText(text);
     return mime;
+}
+
+void AutoHeightTextBrowser::onAnchorClicked(const QUrl &url)
+{
+    if (url.scheme() == QLatin1String("copycode")) {
+        bool ok = false;
+        const int index = url.path().toInt(&ok);
+        if (ok && index >= 0 && index < m_codeBlockTexts.size())
+            QGuiApplication::clipboard()->setText(m_codeBlockTexts.at(index));
+        return;
+    }
+    // Replicates what setOpenExternalLinks(true) used to do automatically —
+    // see the constructor's own comment for why that's off now.
+    QDesktopServices::openUrl(url);
+}
+
+void AutoHeightTextBrowser::doSetSource(const QUrl &name, QTextDocument::ResourceType type)
+{
+    Q_UNUSED(name);
+    Q_UNUSED(type);
+    // Deliberately empty — see the declaration's own comment for why this
+    // widget never wants QTextBrowser's built-in link-navigation behavior.
 }
 
 void AutoHeightTextBrowser::resizeEvent(QResizeEvent *event)

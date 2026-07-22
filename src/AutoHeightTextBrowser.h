@@ -1,9 +1,12 @@
 #pragma once
 
 #include <QTextBrowser>
+#include <QTextDocument>
 #include <QFrame>
 #include <QNetworkAccessManager>
 #include <QSet>
+#include <QVector>
+#include <QString>
 
 class QMimeData;
 
@@ -21,17 +24,20 @@ class AutoHeightTextBrowser : public QTextBrowser
 public:
     explicit AutoHeightTextBrowser(QWidget *parent = nullptr);
 
-    // Renders `content` as Markdown, except any ```html fenced code
-    // block(s) within it — those get spliced in and rendered as real HTML
-    // (tables, styled divs, etc.) instead of a literal code listing, and any
-    // raw <svg>...</svg> markup within such a block gets auto-wrapped into a
-    // renderable <img> (see AutoHeightTextBrowser.cpp — Qt's rich-text HTML
-    // parser silently drops inline <svg> tags otherwise, so this is what
-    // lets a reply draw an actual vector chart). Text outside an html block
-    // is still converted from Markdown first, so the two can mix in one
-    // reply. Falls back to plain setMarkdown() when no ```html block is
-    // present, so this is safe to always call instead of setMarkdown()
-    // directly.
+    // Renders `content` as Markdown. Any ```html fenced code block within it
+    // gets spliced in and rendered as real HTML (tables, styled divs, etc.)
+    // instead of a literal code listing, and any raw <svg>...</svg> markup
+    // within such a block gets auto-wrapped into a renderable <img> (see
+    // AutoHeightTextBrowser.cpp — Qt's rich-text HTML parser silently drops
+    // inline <svg> tags otherwise, so this is what lets a reply draw an
+    // actual vector chart). Any *other* fenced code block (```python,
+    // ```bash, ```javascript, etc. — see CodeHighlighter for the full list)
+    // gets syntax-highlighted instead of rendered as Qt's own plain,
+    // uncolored, one-<pre>-per-line default. `dark` picks which of Theme's
+    // two syntax color sets to use — pass ThemeManager::isDarkActive().
+    // Text outside any fenced block is still converted from Markdown first,
+    // so all of these can mix in one reply. Safe to always call instead of
+    // setMarkdown() directly.
     //
     // Scope note: this rides on QTextBrowser's built-in HTML support, which
     // is a static HTML4/CSS2.1-ish subset — no JavaScript, no live
@@ -42,7 +48,7 @@ public:
     // runs for a message still actively streaming in, where the live
     // preview stays static until the reply finishes and gets re-rendered
     // through HtmlEmbedWidget. MapEmbedWidget is the equivalent for ```map.
-    void setMarkdownWithHtmlBlocks(const QString &content);
+    void setMarkdownWithHtmlBlocks(const QString &content, bool dark);
 
     // Renders `content` literally — no Markdown interpretation — while still
     // substituting recognized emoji characters for the bundled Noto Emoji
@@ -78,10 +84,42 @@ protected:
     // EmojiRenderer::emojiForResourcePath().
     QMimeData *createMimeDataFromSelection() const override;
 
+    // A no-op override — deliberately does *not* call the base
+    // implementation. QTextBrowser treats every activated link (other than
+    // ones setOpenExternalLinks(true) redirects automatically) as internal
+    // navigation: it calls this to actually load and *replace* the
+    // document's content with whatever the link points to. With
+    // setOpenExternalLinks(false) (see the constructor), that now includes
+    // this widget's own "copycode:<index>" Copy links — clicking one was
+    // observed to print "QTextBrowser: No document for copycode:N" and wipe
+    // the entire message bubble, since there's obviously no real document at
+    // that "address" to navigate to. All link handling here goes through
+    // onAnchorClicked() instead (which still fires normally — anchorClicked()
+    // is emitted independently of this method, earlier in the same click),
+    // so this widget never wants QTextBrowser's own navigation at all.
+    void doSetSource(const QUrl &name, QTextDocument::ResourceType type) override;
+
 private slots:
     void adjustHeight();
+    // Handles both link kinds this widget ever shows: a real http(s) link
+    // (opened via QDesktopServices, replicating what setOpenExternalLinks
+    // (true) used to do automatically) and a "copycode:<index>" anchor next
+    // to a syntax-highlighted code block, which instead copies that block's
+    // original (un-highlighted) source text to the clipboard — see
+    // m_codeBlockTexts. openExternalLinks has to be off for this to see
+    // http(s) clicks at all: Qt suppresses anchorClicked() entirely for
+    // external links when that's on, handling them itself instead.
+    void onAnchorClicked(const QUrl &url);
 
 private:
     QNetworkAccessManager m_networkManager;
     QSet<QUrl> m_pendingImageFetches;
+
+    // One entry per syntax-highlighted code block in the most recent
+    // setMarkdownWithHtmlBlocks() call, in source order — index N's "Copy"
+    // link uses a "copycode:N" href, resolved back to this original text
+    // (not the highlighted HTML) in onAnchorClicked(). Rebuilt from scratch
+    // on every call, since content re-renders wholesale rather than
+    // patching in place (streaming tokens included).
+    QVector<QString> m_codeBlockTexts;
 };
