@@ -373,6 +373,17 @@ QString highlightTag(const QString &tagStr, bool dark)
     return out;
 }
 
+// Matches a complete, non-self-closing opening tag whose name is exactly
+// "style" or "script" (e.g. "<script>" or "<script type=\"text/plain\">"),
+// capturing the tag name so the caller can pick css vs. javascript rules.
+const QRegularExpression &embeddedOpenTagRe()
+{
+    static const QRegularExpression re(
+        QStringLiteral("^<(style|script)(?:\\s[^<>]*)?>$"),
+        QRegularExpression::CaseInsensitiveOption);
+    return re;
+}
+
 QString highlightHtml(const QString &code, bool dark)
 {
     const QString cmtColor = Theme::colorToken(QStringLiteral("codeComment"), dark);
@@ -391,8 +402,23 @@ QString highlightHtml(const QString &code, bool dark)
         if (code.at(i) == QLatin1Char('<')) {
             const int close = code.indexOf(QLatin1Char('>'), i);
             const int endPos = (close < 0) ? n : close + 1;
-            out += highlightTag(code.mid(i, endPos - i), dark);
+            const QString tagStr = code.mid(i, endPos - i);
+            out += highlightTag(tagStr, dark);
             i = endPos;
+
+            const QRegularExpressionMatch openMatch = embeddedOpenTagRe().match(tagStr);
+            if (openMatch.hasMatch()) {
+                const QString tagName = openMatch.captured(1).toLower();
+                const QString closeTag = QStringLiteral("</%1>").arg(tagName);
+                const int closeStart = code.indexOf(closeTag, i, Qt::CaseInsensitive);
+                const int contentEnd = (closeStart < 0) ? n : closeStart;
+                bool found = false;
+                const LangRules &rules = rulesFor(
+                    tagName == QLatin1String("style") ? QStringLiteral("css") : QStringLiteral("javascript"),
+                    &found);
+                out += highlightGeneric(code.mid(i, contentEnd - i), rules, dark);
+                i = contentEnd;
+            }
             continue;
         }
         const int next = code.indexOf(QLatin1Char('<'), i);
