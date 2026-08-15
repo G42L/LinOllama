@@ -82,6 +82,15 @@ public:
     // callers should treat that as "unknown" rather than blocking on it.
     void fetchServerVersion();
 
+    // Checks whether a newer Ollama release exists than currentVersion, by
+    // querying GitHub's releases API for ollama/ollama (Ollama's server has
+    // no update-check endpoint of its own — this is the same source the
+    // official Ollama app/CLI use). Result arrives via
+    // updateCheckFinished(); network/parse failures there report
+    // available=false rather than erroring, since "couldn't check" and "no
+    // update" look the same to the caller (a hidden update tag).
+    void checkForUpdate(const QString &currentVersion);
+
     // Streams POST /api/chat with "stream": true. `messages` is a JSON
     // array of {"role", "content"} objects, oldest first — the caller
     // builds this from Conversation::messages. Emits chatThinkingDelta() for
@@ -194,6 +203,12 @@ signals:
     void reachable(bool isReachable);
     void modelsListed(const QStringList &modelNames);
     void serverVersionFetched(const QString &version);
+
+    // One-shot result of checkForUpdate(). latestVersion is the tag name
+    // with any leading "v" stripped (e.g. "0.5.4"), empty if it couldn't be
+    // determined. available is true only when latestVersion is known and
+    // newer than the currentVersion that was passed in.
+    void updateCheckFinished(bool available, const QString &latestVersion);
 
     void chatDelta(const QString &conversationId, const QString &tokenText);
     // Reasoning-trace tokens for thinking-capable models — arrives before

@@ -22,6 +22,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QProcess>
 
 MainWindow::MainWindow(SystemMonitor *systemMonitor,
                         OllamaClient *ollamaClient,
@@ -83,6 +84,16 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
 
     topBarLayout->addStretch(1);
 
+    m_updateAvailableButton = new QToolButton;
+    m_updateAvailableButton->setObjectName("updateAvailableButton");
+    m_updateAvailableButton->setText("Update available");
+    m_updateAvailableButton->setToolTip("Run Ollama's official install script to update");
+    m_updateAvailableButton->setCursor(Qt::PointingHandCursor);
+    m_updateAvailableButton->setAutoRaise(true);
+    m_updateAvailableButton->hide();
+    connect(m_updateAvailableButton, &QToolButton::clicked, this, &MainWindow::onUpdateOllamaClicked);
+    topBarLayout->addWidget(m_updateAvailableButton);
+
     m_ollamaVersionLabel = new QLabel;
     m_ollamaVersionLabel->setObjectName("ollamaVersionLabel");
     m_ollamaVersionLabel->setToolTip("Ollama server version");
@@ -90,15 +101,19 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
 
     connect(m_ollamaClient, &OllamaClient::serverVersionFetched,
             this, &MainWindow::onServerVersionFetched);
+    connect(m_ollamaClient, &OllamaClient::updateCheckFinished,
+            this, &MainWindow::onUpdateCheckFinished);
     // reachable() already fires on every periodic refreshStatus() poll
     // (see main.cpp) — piggybacking the version fetch on it means this
     // stays current if the server restarts on a different build, without
     // its own separate timer.
     connect(m_ollamaClient, &OllamaClient::reachable, this, [this](bool isReachable) {
-        if (isReachable)
+        if (isReachable) {
             m_ollamaClient->fetchServerVersion();
-        else
+        } else {
             m_ollamaVersionLabel->clear();
+            m_updateAvailableButton->hide();
+        }
     });
 
     // --- Sidebar --------------------------------------------------------
@@ -372,6 +387,61 @@ void MainWindow::onSidebarToggleClicked()
 void MainWindow::onServerVersionFetched(const QString &version)
 {
     m_ollamaVersionLabel->setText(version.isEmpty() ? QString() : QString("v%1").arg(version));
+
+    m_currentOllamaVersion = version;
+    if (version.isEmpty())
+        m_updateAvailableButton->hide();
+    else
+        m_ollamaClient->checkForUpdate(version);
+}
+
+void MainWindow::onUpdateCheckFinished(bool available, const QString &latestVersion)
+{
+    m_updateAvailableButton->setVisible(available);
+    if (available)
+        m_updateAvailableButton->setToolTip(
+            QString("Ollama v%1 is available (currently v%2) — click to update")
+                .arg(latestVersion, m_currentOllamaVersion));
+}
+
+void MainWindow::onUpdateOllamaClicked()
+{
+    const auto choice = QMessageBox::question(
+        this, "Update Ollama",
+        "This runs Ollama's official install script:\n\n"
+        "curl -fsSL https://ollama.com/install.sh | sh\n\n"
+        "It will open in a terminal window since it may prompt for your "
+        "sudo password. Continue?",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (choice != QMessageBox::Yes)
+        return;
+
+    static const char *kInstallCommand = "curl -fsSL https://ollama.com/install.sh | sh";
+    const QString shellLine = QString("%1; echo; echo 'Done — press Enter to close.'; read _")
+                                   .arg(kInstallCommand);
+
+    // Try known terminal emulators in turn — there's no portable "open a
+    // terminal running this command" call in Qt. A bare QProcess without a
+    // terminal would still run install.sh, but any internal `sudo` prompt
+    // it makes has no TTY to read a password from and just fails silently.
+    struct TerminalSpec { const char *program; QStringList args; };
+    const QVector<TerminalSpec> terminals = {
+        {"x-terminal-emulator", {"-e", "sh", "-c", shellLine}},
+        {"gnome-terminal", {"--", "sh", "-c", shellLine}},
+        {"konsole", {"-e", "sh", "-c", shellLine}},
+        {"xfce4-terminal", {"-x", "sh", "-c", shellLine}},
+        {"xterm", {"-e", "sh", "-c", shellLine}},
+    };
+
+    for (const TerminalSpec &terminal : terminals) {
+        if (QProcess::startDetached(terminal.program, terminal.args))
+            return;
+    }
+
+    QMessageBox::warning(
+        this, "Update Ollama",
+        "Couldn't find a terminal emulator to run the installer in.\n\n"
+        "Please run this command yourself in a terminal:\n\ncurl -fsSL https://ollama.com/install.sh | sh");
 }
 
 void MainWindow::setSidebarCollapsed(bool collapsed)

@@ -98,6 +98,24 @@ QToolTip {
     font-size: 11px;
 }
 
+/* Small filled accent pill, right before #ollamaVersionLabel — only shown
+   once OllamaClient::checkForUpdate() confirms a newer Ollama release is
+   out (see MainWindow::onUpdateCheckFinished()), so its accent fill is
+   meant to stand out against the otherwise muted top bar. */
+#updateAvailableButton {
+    background-color: {{accent}};
+    color: {{onAccent}};
+    border: none;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+#updateAvailableButton:hover {
+    background-color: {{accentHover}};
+}
+
 /* --- Sidebar ---------------------------------------------------------- */
 #sidebar {
     background-color: {{sidebarBg}};

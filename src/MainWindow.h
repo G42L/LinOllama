@@ -77,6 +77,15 @@ private slots:
     // Populates m_ollamaVersionLabel once fetchServerVersion() resolves —
     // blank (hidden) if the server isn't reachable or predates /api/version.
     void onServerVersionFetched(const QString &version);
+    // Shows/hides m_updateAvailableButton once OllamaClient::checkForUpdate()
+    // resolves — see its own comment for why this piggybacks on the version
+    // fetch rather than having its own timer.
+    void onUpdateCheckFinished(bool available, const QString &latestVersion);
+    // Confirms with the user, then runs Ollama's own official install
+    // script (curl | sh) in a terminal so the user can see progress and
+    // answer any sudo password prompt — see .cpp for why a bare QProcess
+    // isn't enough.
+    void onUpdateOllamaClicked();
 
 private:
     void refreshSidebar();
@@ -161,6 +170,15 @@ private:
     // version, e.g. "v0.5.4". Hidden (empty text) until fetched, and again
     // if the server isn't reachable — see onServerVersionFetched().
     QLabel *m_ollamaVersionLabel = nullptr;
+    // Hidden until onUpdateCheckFinished() reports a newer Ollama release is
+    // out; clicking it runs the official install script to update in place
+    // (see onUpdateOllamaClicked()). Sits right next to m_ollamaVersionLabel.
+    QToolButton *m_updateAvailableButton = nullptr;
+    // The running server's own version string, e.g. "0.5.4" — cached here so
+    // onUpdateCheckFinished() can be re-derived without another /api/version
+    // round trip, and so a later reachable(true) can pass it back into
+    // checkForUpdate() again.
+    QString m_currentOllamaVersion;
     ChatWidget *m_chatWidget = nullptr;
     StatsStripWidget *m_statsStrip = nullptr;
     QSplitter *m_splitter = nullptr;

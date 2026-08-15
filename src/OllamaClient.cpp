@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <QVersionNumber>
 
 OllamaClient::OllamaClient(QObject *parent) : QObject(parent) {}
 
@@ -55,6 +56,39 @@ void OllamaClient::fetchServerVersion()
 
         const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
         emit serverVersionFetched(doc.object().value("version").toString());
+    });
+}
+
+void OllamaClient::checkForUpdate(const QString &currentVersion)
+{
+    // GitHub's REST API, not Ollama's own server — Ollama exposes no
+    // update-check endpoint, so this hits the same releases feed the
+    // official app/CLI check against.
+    QNetworkRequest request(QUrl("https://api.github.com/repos/ollama/ollama/releases/latest"));
+    // GitHub's API rejects requests with no User-Agent header at all.
+    request.setHeader(QNetworkRequest::UserAgentHeader, QByteArray("LinOllama"));
+
+    QNetworkReply *reply = m_manager.get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, currentVersion]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            emit updateCheckFinished(false, QString());
+            return;
+        }
+
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        QString latest = doc.object().value("tag_name").toString();
+        if (latest.startsWith('v'))
+            latest.remove(0, 1);
+
+        if (latest.isEmpty() || currentVersion.isEmpty()) {
+            emit updateCheckFinished(false, latest);
+            return;
+        }
+
+        const bool isNewer = QVersionNumber::fromString(latest) > QVersionNumber::fromString(currentVersion);
+        emit updateCheckFinished(isNewer, latest);
     });
 }
 
