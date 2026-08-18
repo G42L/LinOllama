@@ -7,7 +7,7 @@
 
 namespace {
 
-enum class Kind { Generic, Html, PlainOnly };
+enum class Kind { Generic, Html, Css, PlainOnly };
 
 struct LangRules
 {
@@ -21,6 +21,11 @@ struct LangRules
     bool doubleQuoteString = true;
     bool backtickString = false;
     bool tripleQuoteString = false; // Python-style '''...'''/"""..."""
+    QSet<QString> funcDefKeywords;   // e.g. {"function","def","fn"} — next identifier is a function name
+    QSet<QString> classDefKeywords;  // e.g. {"class","struct"} — next identifier is a class/type name
+    bool atDecorator = false;        // '@ident' colored as a decorator/annotation (Python/TS/Java)
+    bool numericUnderscore = false;  // allow '_' as a digit-group separator (1_000_000)
+    bool dollarVariable = false;     // $VAR / ${VAR} / $(cmd) colored as a variable (Bash)
 };
 
 QString span(const QString &colorHex, const QString &escapedText)
@@ -67,6 +72,10 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         LangRules python;
         python.hashComment = true;
         python.tripleQuoteString = true;
+        python.funcDefKeywords = {"def"};
+        python.classDefKeywords = {"class"};
+        python.atDecorator = true;
+        python.numericUnderscore = true;
         python.keywords = {
             "def", "class", "return", "if", "elif", "else", "for", "while", "import", "from",
             "as", "try", "except", "finally", "with", "pass", "break", "continue", "lambda",
@@ -77,6 +86,8 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
 
         LangRules bash;
         bash.hashComment = true;
+        bash.dollarVariable = true;
+        bash.funcDefKeywords = {"function"};
         bash.keywords = {
             "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
             "function", "return", "in", "local", "export", "echo", "exit", "break", "continue",
@@ -88,6 +99,9 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         js.slashSlashComment = true;
         js.slashStarComment = true;
         js.backtickString = true;
+        js.funcDefKeywords = {"function"};
+        js.classDefKeywords = {"class"};
+        js.numericUnderscore = true;
         js.keywords = {
             "function", "return", "if", "else", "for", "while", "do", "switch", "case", "default",
             "break", "continue", "var", "let", "const", "class", "extends", "new", "this",
@@ -98,6 +112,7 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         t["javascript"] = js;
 
         LangRules ts = js;
+        ts.atDecorator = true;
         ts.keywords += QSet<QString>{
             "interface", "type", "enum", "implements", "namespace", "readonly", "public",
             "private", "protected", "abstract", "declare", "is", "keyof", "infer",
@@ -107,6 +122,8 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         LangRules java;
         java.slashSlashComment = true;
         java.slashStarComment = true;
+        java.classDefKeywords = {"class", "interface", "enum"};
+        java.atDecorator = true;
         java.keywords = {
             "public", "private", "protected", "class", "interface", "extends", "implements",
             "return", "if", "else", "for", "while", "do", "switch", "case", "default", "break",
@@ -129,6 +146,7 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         t["c"] = c;
 
         LangRules cpp = c;
+        cpp.classDefKeywords = {"class", "struct"};
         cpp.keywords += QSet<QString>{
             "class", "public", "private", "protected", "virtual", "override", "namespace",
             "using", "template", "typename", "new", "delete", "this", "nullptr", "auto",
@@ -138,6 +156,7 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         t["cpp"] = cpp;
 
         LangRules csharp = cpp;
+        csharp.classDefKeywords = {"class", "interface", "struct", "enum"};
         csharp.keywords += QSet<QString>{
             "namespace", "using", "public", "private", "protected", "internal", "class",
             "interface", "struct", "enum", "readonly", "static", "override", "virtual",
@@ -149,6 +168,7 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         go.slashSlashComment = true;
         go.slashStarComment = true;
         go.backtickString = true;
+        go.funcDefKeywords = {"func"};
         go.keywords = {
             "func", "package", "import", "return", "if", "else", "for", "range", "switch",
             "case", "default", "break", "continue", "var", "const", "type", "struct",
@@ -159,6 +179,8 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         LangRules rust;
         rust.slashSlashComment = true;
         rust.slashStarComment = true;
+        rust.funcDefKeywords = {"fn"};
+        rust.classDefKeywords = {"struct", "enum", "trait"};
         rust.keywords = {
             "fn", "let", "mut", "return", "if", "else", "for", "while", "loop", "match",
             "struct", "enum", "impl", "trait", "pub", "use", "mod", "self", "Self", "true",
@@ -171,6 +193,8 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         php.hashComment = true;
         php.slashSlashComment = true;
         php.slashStarComment = true;
+        php.funcDefKeywords = {"function"};
+        php.classDefKeywords = {"class", "interface"};
         php.keywords = {
             "function", "return", "if", "else", "elseif", "endif", "for", "foreach", "while",
             "do", "switch", "case", "default", "break", "continue", "class", "extends",
@@ -182,6 +206,8 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
 
         LangRules ruby;
         ruby.hashComment = true;
+        ruby.funcDefKeywords = {"def"};
+        ruby.classDefKeywords = {"class", "module"};
         ruby.keywords = {
             "def", "end", "return", "if", "elsif", "else", "unless", "for", "while", "until",
             "class", "module", "do", "break", "next", "case", "when", "then", "begin", "rescue",
@@ -212,10 +238,6 @@ const LangRules &rulesFor(const QString &canonical, bool *found)
         yaml.keywords = {"true", "false", "null", "yes", "no", "on", "off"};
         t["yaml"] = yaml;
 
-        LangRules css;
-        css.slashStarComment = true;
-        t["css"] = css;
-
         return t;
     }();
 
@@ -229,6 +251,8 @@ Kind kindFor(const QString &canonical)
 {
     if (canonical == QLatin1String("html"))
         return Kind::Html;
+    if (canonical == QLatin1String("css"))
+        return Kind::Css;
     bool found = false;
     rulesFor(canonical, &found);
     return found ? Kind::Generic : Kind::PlainOnly;
@@ -243,13 +267,86 @@ QString highlightGeneric(const QString &code, const LangRules &rules, bool dark)
     const QString strColor = Theme::colorToken(QStringLiteral("codeString"), dark);
     const QString cmtColor = Theme::colorToken(QStringLiteral("codeComment"), dark);
     const QString numColor = Theme::colorToken(QStringLiteral("codeNumber"), dark);
+    const QString tagColor = Theme::colorToken(QStringLiteral("codeTag"), dark);
+    const QString varColor = Theme::colorToken(QStringLiteral("codeAttr"), dark);
 
     QString out;
     const int n = code.size();
     int i = 0;
 
+    // "Expect a function/class name next" state, set right after coloring a
+    // funcDefKeywords/classDefKeywords keyword. Only survives across
+    // whitespace — any other character (an operator, a comment, another
+    // token) clears it, so e.g. an anonymous `function (x)` doesn't wrongly
+    // color `x` as the function's name.
+    bool pendingFuncName = false;
+    bool pendingClassName = false;
+
+    // Given code.at(pos) == '$' and pos+1 < n, returns the index just past
+    // the variable/substitution token starting there (${...} and $(...) are
+    // brace/paren-depth matched so they handle nesting; a bare word or
+    // digit becomes $name/$1; one of the special one-char vars becomes
+    // $@/$#/$?/$$/$!/$*). Returns pos+1 (i.e. no token) if `$` isn't
+    // followed by anything variable-like, so callers can tell a real match
+    // from a lone `$`.
+    auto dollarTokenEnd = [&code, n](int pos) {
+        const QChar next = code.at(pos + 1);
+        if (next == QLatin1Char('{')) {
+            int depth = 1;
+            int k = pos + 2;
+            while (k < n && depth > 0) {
+                if (code.at(k) == QLatin1Char('{')) depth++;
+                else if (code.at(k) == QLatin1Char('}')) depth--;
+                k++;
+            }
+            return k;
+        }
+        if (next == QLatin1Char('(')) {
+            int depth = 1;
+            int k = pos + 2;
+            while (k < n && depth > 0) {
+                if (code.at(k) == QLatin1Char('(')) depth++;
+                else if (code.at(k) == QLatin1Char(')')) depth--;
+                k++;
+            }
+            return k;
+        }
+        if (isWordStart(next) || next.isDigit()) {
+            int k = pos + 1;
+            while (k < n && isWordChar(code.at(k)))
+                k++;
+            return k;
+        }
+        static const QString specialVars = QStringLiteral("@#?$!*");
+        return specialVars.contains(next) ? pos + 2 : pos + 1;
+    };
+
     while (i < n) {
         const QChar c = code.at(i);
+        const bool wasPendingFunc = pendingFuncName;
+        const bool wasPendingClass = pendingClassName;
+        if (!c.isSpace()) {
+            pendingFuncName = false;
+            pendingClassName = false;
+        }
+
+        if (rules.atDecorator && c == QLatin1Char('@') && i + 1 < n && isWordStart(code.at(i + 1))) {
+            int j = i + 1;
+            while (j < n && isWordChar(code.at(j)))
+                j++;
+            out += span(kwColor, code.mid(i, j - i).toHtmlEscaped());
+            i = j;
+            continue;
+        }
+
+        if (rules.dollarVariable && c == QLatin1Char('$') && i + 1 < n) {
+            const int j = dollarTokenEnd(i);
+            if (j > i + 1) {
+                out += span(varColor, code.mid(i, j - i).toHtmlEscaped());
+                i = j;
+                continue;
+            }
+        }
 
         if (rules.hashComment && c == QLatin1Char('#')) {
             int end = code.indexOf(QLatin1Char('\n'), i);
@@ -297,6 +394,40 @@ QString highlightGeneric(const QString &code, const LangRules &rules, bool dark)
             || (rules.backtickString && c == QLatin1Char('`'));
         if (atString) {
             const QChar quote = c;
+
+            // Shells expand $variables inside double-quoted strings (but not
+            // single-quoted ones), so scan those char-by-char instead of as
+            // one opaque run, splicing in variable-colored spans.
+            if (rules.dollarVariable && quote == QLatin1Char('"')) {
+                int j = i + 1;
+                int segStart = j;
+                out += span(strColor, QStringLiteral("\"").toHtmlEscaped());
+                while (j < n && code.at(j) != quote) {
+                    if (code.at(j) == QLatin1Char('\\') && j + 1 < n) {
+                        j += 2;
+                        continue;
+                    }
+                    if (code.at(j) == QLatin1Char('$') && j + 1 < n) {
+                        const int k = dollarTokenEnd(j);
+                        if (k > j + 1) {
+                            if (j > segStart)
+                                out += span(strColor, code.mid(segStart, j - segStart).toHtmlEscaped());
+                            out += span(varColor, code.mid(j, k - j).toHtmlEscaped());
+                            j = k;
+                            segStart = j;
+                            continue;
+                        }
+                    }
+                    j++;
+                }
+                if (j > segStart)
+                    out += span(strColor, code.mid(segStart, j - segStart).toHtmlEscaped());
+                if (j < n)
+                    out += span(strColor, QStringLiteral("\"").toHtmlEscaped());
+                i = qMin(j + 1, n);
+                continue;
+            }
+
             int j = i + 1;
             while (j < n && code.at(j) != quote) {
                 if (code.at(j) == QLatin1Char('\\') && j + 1 < n)
@@ -314,6 +445,7 @@ QString highlightGeneric(const QString &code, const LangRules &rules, bool dark)
             int j = i;
             while (j < n && (code.at(j).isDigit() || code.at(j) == QLatin1Char('.')
                              || code.at(j) == QLatin1Char('x') || code.at(j) == QLatin1Char('X')
+                             || (rules.numericUnderscore && code.at(j) == QLatin1Char('_'))
                              || (code.at(j).isLetter() && j > i && code.at(j - 1).isDigit())))
                 j++;
             out += span(numColor, code.mid(i, j - i).toHtmlEscaped());
@@ -329,7 +461,172 @@ QString highlightGeneric(const QString &code, const LangRules &rules, bool dark)
             const bool isKeyword = rules.caseInsensitiveKeywords
                 ? rules.keywords.contains(word.toUpper())
                 : rules.keywords.contains(word);
-            out += isKeyword ? span(kwColor, word.toHtmlEscaped()) : word.toHtmlEscaped();
+            if (isKeyword) {
+                out += span(kwColor, word.toHtmlEscaped());
+                if (rules.funcDefKeywords.contains(word))
+                    pendingFuncName = true;
+                else if (rules.classDefKeywords.contains(word))
+                    pendingClassName = true;
+            } else if (wasPendingFunc || wasPendingClass) {
+                out += span(tagColor, word.toHtmlEscaped());
+            } else if (j < n && code.at(j) == QLatin1Char('(')) {
+                out += span(tagColor, word.toHtmlEscaped());
+            } else {
+                out += word.toHtmlEscaped();
+            }
+            i = j;
+            continue;
+        }
+
+        out += QString(c).toHtmlEscaped();
+        i++;
+    }
+    return out;
+}
+
+// Context-aware CSS tokenizer: unlike the generic keyword-based scanner,
+// this tracks brace depth to distinguish selectors (depth 0 — colored as a
+// whole run, since properly splitting compound selectors like `.container`
+// or `a:hover::before` into element/class/pseudo parts isn't worth the
+// complexity here) from declarations (depth > 0, where the first identifier
+// after `{`/`;` is a property name, and hex colors/numbers/strings in the
+// value get their own colors).
+QString highlightCss(const QString &code, bool dark)
+{
+    const QString selColor = Theme::colorToken(QStringLiteral("codeTag"), dark);
+    const QString propColor = Theme::colorToken(QStringLiteral("codeAttr"), dark);
+    const QString strColor = Theme::colorToken(QStringLiteral("codeString"), dark);
+    const QString numColor = Theme::colorToken(QStringLiteral("codeNumber"), dark);
+    const QString cmtColor = Theme::colorToken(QStringLiteral("codeComment"), dark);
+    const QString kwColor = Theme::colorToken(QStringLiteral("codeKeyword"), dark);
+
+    auto isHexDigit = [](QChar ch) {
+        return ch.isDigit() || (ch >= QLatin1Char('a') && ch <= QLatin1Char('f'))
+            || (ch >= QLatin1Char('A') && ch <= QLatin1Char('F'));
+    };
+    auto isSelectorChar = [](QChar ch) {
+        static const QString extra = QStringLiteral("-_.#:*[]=%^$|~");
+        return ch.isLetterOrNumber() || extra.contains(ch);
+    };
+
+    QString out;
+    const int n = code.size();
+    int i = 0;
+    int depth = 0;
+    bool atPropertyStart = true;
+
+    while (i < n) {
+        const QChar c = code.at(i);
+
+        if (c == QLatin1Char('/') && i + 1 < n && code.at(i + 1) == QLatin1Char('*')) {
+            const int close = code.indexOf(QStringLiteral("*/"), i + 2);
+            const int endPos = (close < 0) ? n : close + 2;
+            out += span(cmtColor, code.mid(i, endPos - i).toHtmlEscaped());
+            i = endPos;
+            continue;
+        }
+        if (c == QLatin1Char('"') || c == QLatin1Char('\'')) {
+            const QChar quote = c;
+            int j = i + 1;
+            while (j < n && code.at(j) != quote) {
+                if (code.at(j) == QLatin1Char('\\') && j + 1 < n) j += 2; else j++;
+            }
+            const int endPos = qMin(j + 1, n);
+            out += span(strColor, code.mid(i, endPos - i).toHtmlEscaped());
+            i = endPos;
+            continue;
+        }
+        if (c == QLatin1Char('{')) {
+            out += c;
+            depth++;
+            atPropertyStart = true;
+            i++;
+            continue;
+        }
+        if (c == QLatin1Char('}')) {
+            out += c;
+            if (depth > 0) depth--;
+            atPropertyStart = true;
+            i++;
+            continue;
+        }
+        if (c == QLatin1Char(';')) {
+            out += c;
+            atPropertyStart = true;
+            i++;
+            continue;
+        }
+        if (c.isSpace()) {
+            out += c;
+            i++;
+            continue;
+        }
+
+        if (depth == 0) {
+            // Selector context (or an @-rule prelude, e.g. @media/@import).
+            if (c == QLatin1Char('@')) {
+                int j = i + 1;
+                while (j < n && isWordChar(code.at(j)))
+                    j++;
+                out += span(kwColor, code.mid(i, j - i).toHtmlEscaped());
+                i = j;
+                continue;
+            }
+            if (isSelectorChar(c)) {
+                int j = i;
+                while (j < n && isSelectorChar(code.at(j)))
+                    j++;
+                out += span(selColor, code.mid(i, j - i).toHtmlEscaped());
+                i = j;
+                continue;
+            }
+            out += QString(c).toHtmlEscaped();
+            i++;
+            continue;
+        }
+
+        // Declaration context (inside a rule body).
+        if (atPropertyStart && isWordStart(c)) {
+            int j = i;
+            while (j < n && (isWordChar(code.at(j)) || code.at(j) == QLatin1Char('-')))
+                j++;
+            out += span(propColor, code.mid(i, j - i).toHtmlEscaped());
+            i = j;
+            atPropertyStart = false;
+            continue;
+        }
+        if (c == QLatin1Char('#')) {
+            int j = i + 1;
+            while (j < n && (j - i - 1) < 8 && isHexDigit(code.at(j)))
+                j++;
+            if (j > i + 1) {
+                out += span(strColor, code.mid(i, j - i).toHtmlEscaped());
+                i = j;
+                continue;
+            }
+        }
+        if (c.isDigit() || (c == QLatin1Char('.') && i + 1 < n && code.at(i + 1).isDigit())) {
+            int j = i;
+            while (j < n && (code.at(j).isDigit() || code.at(j) == QLatin1Char('.')
+                             || code.at(j).isLetter() || code.at(j) == QLatin1Char('%')))
+                j++;
+            out += span(numColor, code.mid(i, j - i).toHtmlEscaped());
+            i = j;
+            continue;
+        }
+        if (c == QLatin1Char('!')) {
+            int j = i;
+            while (j < n && !code.at(j).isSpace() && code.at(j) != QLatin1Char(';') && code.at(j) != QLatin1Char('}'))
+                j++;
+            out += span(kwColor, code.mid(i, j - i).toHtmlEscaped());
+            i = j;
+            continue;
+        }
+        if (isWordStart(c)) {
+            int j = i;
+            while (j < n && (isWordChar(code.at(j)) || code.at(j) == QLatin1Char('-')))
+                j++;
+            out += code.mid(i, j - i).toHtmlEscaped();
             i = j;
             continue;
         }
@@ -412,11 +709,13 @@ QString highlightHtml(const QString &code, bool dark)
                 const QString closeTag = QStringLiteral("</%1>").arg(tagName);
                 const int closeStart = code.indexOf(closeTag, i, Qt::CaseInsensitive);
                 const int contentEnd = (closeStart < 0) ? n : closeStart;
-                bool found = false;
-                const LangRules &rules = rulesFor(
-                    tagName == QLatin1String("style") ? QStringLiteral("css") : QStringLiteral("javascript"),
-                    &found);
-                out += highlightGeneric(code.mid(i, contentEnd - i), rules, dark);
+                if (tagName == QLatin1String("style")) {
+                    out += highlightCss(code.mid(i, contentEnd - i), dark);
+                } else {
+                    bool found = false;
+                    const LangRules &rules = rulesFor(QStringLiteral("javascript"), &found);
+                    out += highlightGeneric(code.mid(i, contentEnd - i), rules, dark);
+                }
                 i = contentEnd;
             }
             continue;
@@ -439,6 +738,8 @@ QString highlightToHtml(const QString &code, const QString &language, bool dark)
     switch (kindFor(canonical)) {
     case Kind::Html:
         return highlightHtml(code, dark);
+    case Kind::Css:
+        return highlightCss(code, dark);
     case Kind::Generic: {
         bool found = false;
         const LangRules &rules = rulesFor(canonical, &found);

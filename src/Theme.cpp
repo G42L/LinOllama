@@ -68,6 +68,16 @@ QWidget {
     font-size: 13px;
 }
 
+/* An explicit "color" above always wins over Qt's own palette-based disabled
+   dimming (QPalette::Disabled only kicks in when nothing in QSS already set
+   the color), so every disabled control — greyed-out spin boxes/line edits
+   like Settings' generation-parameter fields, disabled buttons elsewhere,
+   etc. — would otherwise still render at full text color despite
+   setEnabled(false). This restores the dimmed look. */
+QWidget:disabled {
+    color: {{secondaryText}};
+}
+
 QMainWindow {
     background-color: {{bg}};
 }
@@ -412,6 +422,31 @@ QSlider#copyIconSizeSlider::handle:horizontal {
     height: 14px;
     margin: -4px 0;
     border-radius: 7px;
+}
+
+/* setEnabled(false) alone has no visual effect here: every property above
+   is set unconditionally, so QSS keeps painting the enabled look even
+   while the widget is disabled (e.g. the context-length slider gated by
+   "Use custom context length"). These :disabled overrides are what
+   actually grey it out. */
+QSlider#contextLengthSlider::sub-page:horizontal:disabled,
+QSlider#meterSmoothingSlider::sub-page:horizontal:disabled,
+QSlider#paragraphSpacingSlider::sub-page:horizontal:disabled,
+QSlider#listItemSpacingSlider::sub-page:horizontal:disabled,
+QSlider#headingSpacingBeforeSlider::sub-page:horizontal:disabled,
+QSlider#fontScaleSlider::sub-page:horizontal:disabled,
+QSlider#copyIconSizeSlider::sub-page:horizontal:disabled {
+    background-color: {{progressTrack}};
+}
+
+QSlider#contextLengthSlider::handle:horizontal:disabled,
+QSlider#meterSmoothingSlider::handle:horizontal:disabled,
+QSlider#paragraphSpacingSlider::handle:horizontal:disabled,
+QSlider#listItemSpacingSlider::handle:horizontal:disabled,
+QSlider#headingSpacingBeforeSlider::handle:horizontal:disabled,
+QSlider#fontScaleSlider::handle:horizontal:disabled,
+QSlider#copyIconSizeSlider::handle:horizontal:disabled {
+    background-color: {{secondaryText}};
 }
 
 /* Small muted descriptive text — Settings' per-section hint labels
