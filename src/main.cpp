@@ -14,6 +14,8 @@
 #include "ConversationStore.h"
 #include "ThemeManager.h"
 #include "WhisperManager.h"
+#include "RagStore.h"
+#include "RagIngestionController.h"
 #include "Theme.h"
 
 int main(int argc, char *argv[])
@@ -126,8 +128,12 @@ int main(int argc, char *argv[])
     ServerController serverController;
     ConversationStore conversationStore;
     WhisperManager whisperManager;
+    RagStore ragStore;
+    ragStore.open(); // failure just means the knowledge base is unusable this run — RagStore's own calls no-op safely rather than crashing, see its header
+    RagIngestionController ragIngestionController(&ollamaClient, &ragStore);
 
-    MainWindow mainWindow(&systemMonitor, &ollamaClient, &conversationStore, &themeManager, &whisperManager);
+    MainWindow mainWindow(&systemMonitor, &ollamaClient, &conversationStore, &themeManager, &whisperManager,
+                           &ragStore, &ragIngestionController);
     TrayApplication trayApp(&systemMonitor, &ollamaClient, &serverController, &conversationStore, &mainWindow, &themeManager);
     mainWindow.show();
 

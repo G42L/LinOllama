@@ -34,6 +34,7 @@ class ToolCallSectionWidget;
 class ThemeManager;
 class QTimer;
 class QShortcut;
+class RagStore;
 
 // Displays the active conversation and handles sending messages + streaming
 // the assistant's reply in. Does not own OllamaClient/ConversationStore —
@@ -47,7 +48,7 @@ public:
     // as ollamaClient/store) — only used to know light-vs-dark for
     // reloadThemedIcons() and to hear about live theme switches.
     ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
-               WhisperManager *whisperManager, QWidget *parent = nullptr);
+               WhisperManager *whisperManager, RagStore *ragStore, QWidget *parent = nullptr);
     // Deletes m_pendingVoiceFilePath if the app is closed while a
     // transcription is still in flight — otherwise it'd never get cleaned
     // up, since onWhisperTranscriptionFinished() is what normally does that
@@ -102,6 +103,13 @@ public:
     // turn the tool back off rather than leave it checked but broken (see
     // onWebSearchToggled()).
     void setBraveApiKey(const QString &key);
+
+    // Mirrors Settings' Knowledge Base embedding-model choice into
+    // m_toolExecutor — same "caller persists, this just applies" pattern as
+    // setBraveApiKey() above. Also re-validates m_ragAction the same way
+    // setBraveApiKey() does for web search: an emptied-out model turns the
+    // tool back off rather than leaving it checked but broken.
+    void setEmbeddingModel(const QString &model);
 
     // Re-reads "chat/useCustomContextLength"/"chat/customContextLength"
     // from QSettings and refreshes the context-usage bar accordingly —
@@ -200,6 +208,7 @@ private slots:
     void onCalculatorToggled(bool enabled);
     void onDateTimeToolToggled(bool enabled);
     void onStackOverflowToggled(bool enabled);
+    void onRagToggled(bool enabled);
     void onThinkingToggled(bool enabled);
     void onVoicePressed();
     void onVoiceReleased();
@@ -640,16 +649,24 @@ private:
     QAction *m_dateTimeAction = nullptr;
     QAction *m_stackOverflowAction = nullptr;
     QAction *m_thinkingAction = nullptr;
+    QAction *m_ragAction = nullptr;
     bool m_webSearchEnabled = false; // off by default, per spec
     bool m_calculatorEnabled = false;
     bool m_dateTimeEnabled = false;
     bool m_stackOverflowEnabled = false;
     bool m_thinkingEnabled = true;   // matches this app's prior always-on behavior
+    bool m_ragEnabled = false;
 
     // Executes whatever built-in tools the model actually decided to call
     // (see handleToolCalls()/onAllToolCallsCompleted()) — owned here,
     // constructed once in the constructor.
     ToolExecutor *m_toolExecutor = nullptr;
+    // Not owned — the app-level shared instance (see main.cpp), threaded
+    // through so m_ragAction's toggle can check RagStore::isEmpty() before
+    // letting search_knowledge_base be enabled (same "don't enable a tool
+    // that's guaranteed to be useless" reasoning as onWebSearchToggled()'s
+    // empty-API-key check).
+    RagStore *m_ragStore = nullptr;
     // Live ToolCallSectionWidget(s) for the *current* round of the active
     // conversation's in-flight turn, indexed exactly like ToolExecutor's own
     // callIndex — see handleToolCalls() (populates this) and

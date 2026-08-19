@@ -2,6 +2,7 @@
 #include "ThinkingSectionWidget.h"
 #include "ToolCallSectionWidget.h"
 #include "BuiltinTools.h"
+#include "RagStore.h"
 #include "ThemeManager.h"
 #include "Theme.h"
 
@@ -36,12 +37,13 @@
 #include <QKeyEvent>
 
 ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
-                       WhisperManager *whisperManager, QWidget *parent)
+                       WhisperManager *whisperManager, RagStore *ragStore, QWidget *parent)
     : QWidget(parent)
     , m_ollamaClient(ollamaClient)
     , m_store(store)
     , m_themeManager(themeManager)
     , m_whisperManager(whisperManager)
+    , m_ragStore(ragStore)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -277,6 +279,11 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_stackOverflowAction->setChecked(m_stackOverflowEnabled);
     connect(m_stackOverflowAction, &QAction::toggled, this, &ChatWidget::onStackOverflowToggled);
 
+    m_ragAction = toolsMenu->addAction("Search knowledge base");
+    m_ragAction->setCheckable(true);
+    m_ragAction->setChecked(m_ragEnabled);
+    connect(m_ragAction, &QAction::toggled, this, &ChatWidget::onRagToggled);
+
     m_calculatorAction = toolsMenu->addAction("Calculator");
     m_calculatorAction->setCheckable(true);
     m_calculatorAction->setChecked(m_calculatorEnabled);
@@ -300,6 +307,8 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     connect(m_toolExecutor, &ToolExecutor::toolCallCompleted, this, &ChatWidget::onToolCallCompleted);
     connect(m_toolExecutor, &ToolExecutor::allToolCallsCompleted, this, &ChatWidget::onAllToolCallsCompleted);
     m_toolExecutor->setBraveApiKey(QSettings().value("webSearch/braveApiKey").toString());
+    m_toolExecutor->setKnowledgeBase(m_ollamaClient, m_ragStore);
+    m_toolExecutor->setEmbeddingModel(QSettings().value("rag/embeddingModel").toString());
 
     toolLayout->addStretch(1);
 
@@ -509,6 +518,18 @@ void ChatWidget::setBraveApiKey(const QString &key)
         const QSignalBlocker blocker(m_webSearchAction);
         m_webSearchAction->setChecked(false);
         m_webSearchEnabled = false;
+        updateToolsButtonAppearance();
+    }
+}
+
+void ChatWidget::setEmbeddingModel(const QString &model)
+{
+    m_toolExecutor->setEmbeddingModel(model);
+    // Same defensive second gate as setBraveApiKey() above.
+    if (model.isEmpty() && m_ragEnabled) {
+        const QSignalBlocker blocker(m_ragAction);
+        m_ragAction->setChecked(false);
+        m_ragEnabled = false;
         updateToolsButtonAppearance();
     }
 }
@@ -1545,6 +1566,8 @@ QJsonArray ChatWidget::buildToolDefinitions() const
         tools.append(BuiltinTools::currentDateTimeDefinition());
     if (m_stackOverflowEnabled)
         tools.append(BuiltinTools::stackOverflowSearchDefinition());
+    if (m_ragEnabled)
+        tools.append(BuiltinTools::searchKnowledgeBaseDefinition());
     return tools;
 }
 
@@ -2258,6 +2281,32 @@ void ChatWidget::onStackOverflowToggled(bool enabled)
     updateToolsButtonAppearance();
 }
 
+void ChatWidget::onRagToggled(bool enabled)
+{
+    // Same "don't enable a tool that's guaranteed to be useless" gate as
+    // onWebSearchToggled()'s empty-API-key check: an empty knowledge base
+    // or unconfigured embedding model means every search_knowledge_base
+    // call would just come back "no relevant documents" (or an outright
+    // error), wasting a tool round for nothing the user could tell was
+    // coming.
+    const bool noEmbeddingModel = QSettings().value("rag/embeddingModel").toString().isEmpty();
+    const bool emptyKnowledgeBase = !m_ragStore || m_ragStore->isEmpty();
+    if (enabled && (noEmbeddingModel || emptyKnowledgeBase)) {
+        {
+            const QSignalBlocker blocker(m_ragAction);
+            m_ragAction->setChecked(false);
+        }
+        const QString hint = noEmbeddingModel
+            ? "Configure an embedding model in Settings → Knowledge Base to enable this."
+            : "Add at least one document in Settings → Knowledge Base to enable this.";
+        m_ragAction->setToolTip(hint);
+        QToolTip::showText(QCursor::pos(), hint, m_toolsButton);
+        return;
+    }
+    m_ragEnabled = enabled;
+    updateToolsButtonAppearance();
+}
+
 void ChatWidget::onThinkingToggled(bool enabled)
 {
     m_thinkingEnabled = enabled;
@@ -2271,6 +2320,8 @@ void ChatWidget::updateToolsButtonAppearance()
         activeParts << "Web";
     if (m_stackOverflowEnabled)
         activeParts << "SO";
+    if (m_ragEnabled)
+        activeParts << "KB";
     if (m_calculatorEnabled)
         activeParts << "Calc";
     if (m_dateTimeEnabled)
@@ -2461,7 +2512,7 @@ void ChatWidget::reloadThemedIcons()
     // thinking icons' tint, and it's invoked once during construction
     // before m_voiceButton (built later in the constructor) exists yet —
     // guard each widget rather than relying on call order.
-    if (!m_webSearchAction || !m_stackOverflowAction || !m_thinkingAction || !m_voiceButton)
+    if (!m_webSearchAction || !m_stackOverflowAction || !m_thinkingAction || !m_ragAction || !m_voiceButton)
         return;
 
     const bool dark = m_themeManager && m_themeManager->isDarkActive();
@@ -2477,6 +2528,10 @@ void ChatWidget::reloadThemedIcons()
     // since their labels already do that.
     m_stackOverflowAction->setIcon(Theme::loadThemedIcon(
         ":/icons/web-search.svg", dark, 16, m_stackOverflowEnabled ? "accent" : "secondaryText"));
+    // Same reasoning as Stack Overflow above — another "look something up"
+    // tool, no dedicated asset needed since the label distinguishes it.
+    m_ragAction->setIcon(Theme::loadThemedIcon(
+        ":/icons/web-search.svg", dark, 16, m_ragEnabled ? "accent" : "secondaryText"));
     m_thinkingAction->setIcon(Theme::loadThemedIcon(
         ":/icons/thinking.svg", dark, 16, m_thinkingEnabled ? "accent" : "secondaryText"));
     // The button's own "recording" property, set synchronously in

@@ -460,3 +460,39 @@ void OllamaClient::deleteModel(const QString &model)
         emit modelDeleted(model, ok, ok ? QString() : reply->errorString());
     });
 }
+
+void OllamaClient::requestEmbeddings(const QString &requestId, const QString &model, const QStringList &texts)
+{
+    QUrl url = m_baseUrl;
+    url.setPath("/api/embed");
+
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+
+    QJsonObject body{{"model", model}, {"input", QJsonArray::fromStringList(texts)}};
+    QNetworkReply *reply = m_manager.post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, requestId]() {
+        reply->deleteLater();
+
+        if (reply->error() != QNetworkReply::NoError) {
+            emit embeddingsFetched(requestId, {});
+            return;
+        }
+
+        const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        const QJsonArray embeddingsArray = doc.object().value("embeddings").toArray();
+
+        QVector<QVector<float>> embeddings;
+        embeddings.reserve(embeddingsArray.size());
+        for (const QJsonValue &embeddingValue : embeddingsArray) {
+            const QJsonArray floats = embeddingValue.toArray();
+            QVector<float> vec;
+            vec.reserve(floats.size());
+            for (const QJsonValue &f : floats)
+                vec.append(static_cast<float>(f.toDouble()));
+            embeddings.append(vec);
+        }
+        emit embeddingsFetched(requestId, embeddings);
+    });
+}

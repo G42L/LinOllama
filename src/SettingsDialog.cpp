@@ -1,5 +1,8 @@
 #include "SettingsDialog.h"
 #include "Theme.h"
+#include "RagStore.h"
+#include "RagIngestionController.h"
+#include "DocumentTextExtractor.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -175,15 +178,19 @@ QIcon makeAdaptiveSwatch()
 
 SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
                                 ConversationStore *conversationStore,
-                                WhisperManager *whisperManager, QWidget *parent)
+                                WhisperManager *whisperManager,
+                                RagStore *ragStore, RagIngestionController *ragIngestionController,
+                                QWidget *parent)
     : QDialog(parent)
     , m_themeManager(themeManager)
     , m_ollamaClient(ollamaClient)
     , m_conversationStore(conversationStore)
     , m_whisperManager(whisperManager)
+    , m_ragStore(ragStore)
+    , m_ragIngestionController(ragIngestionController)
 {
     setWindowTitle("Settings");
-    setMinimumWidth(420);
+    setMinimumWidth(620);
     // Comfortably tall enough for the fullest single tab (Whisper, with its
     // model table) without the dialog needing to grow when switching tabs —
     // each tab only holds a fraction of what used to be stacked in one long
@@ -207,6 +214,8 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     auto *whisperPageLayout = new QVBoxLayout(whisperPage);
     auto *dataPage = new QWidget;
     auto *dataPageLayout = new QVBoxLayout(dataPage);
+    auto *kbPage = new QWidget;
+    auto *kbPageLayout = new QVBoxLayout(kbPage);
 
     tabs->addTab(appearancePage, "Appearance");
     tabs->addTab(formattingPage, "Formatting");
@@ -236,6 +245,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     };
     tabs->addTab(makeScrollablePage(ollamaPage), "Ollama");
     tabs->addTab(makeScrollablePage(whisperPage), "Whisper");
+    tabs->addTab(makeScrollablePage(kbPage), "Knowledge Base");
     tabs->addTab(makeScrollablePage(dataPage), "Data");
 
     // --- Appearance tab ----------------------------------------------------
@@ -1064,6 +1074,95 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
 
     dataPageLayout->addWidget(clearGroup);
     dataPageLayout->addStretch();
+
+    // --- Knowledge Base tab: embedding model + chunking + documents --------
+    auto *embeddingGroup = new QGroupBox("Embedding model");
+    auto *embeddingGroupLayout = new QVBoxLayout(embeddingGroup);
+
+    auto *embeddingModelRow = new QHBoxLayout;
+    embeddingModelRow->addWidget(new QLabel("Model"));
+    m_embeddingModelCombo = new QComboBox;
+    embeddingModelRow->addWidget(m_embeddingModelCombo, /*stretch=*/1);
+    embeddingGroupLayout->addLayout(embeddingModelRow);
+    connect(m_embeddingModelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SettingsDialog::onEmbeddingModelComboChanged);
+
+    auto *embeddingHint = new QLabel(
+        "Only models that report embedding support are listed. If none appear, pull one — "
+        "e.g. \"ollama pull nomic-embed-text\" — and reopen Settings.");
+    embeddingHint->setWordWrap(true);
+    embeddingHint->setObjectName("settingsHintLabel");
+    embeddingGroupLayout->addWidget(embeddingHint);
+
+    kbPageLayout->addWidget(embeddingGroup);
+    refreshEmbeddingModelCombo();
+
+    auto *chunkingGroup = new QGroupBox("Chunking");
+    auto *chunkingLayout = new QFormLayout(chunkingGroup);
+
+    m_chunkSizeSpin = new QSpinBox;
+    m_chunkSizeSpin->setRange(200, 8000);
+    m_chunkSizeSpin->setSingleStep(100);
+    m_chunkSizeSpin->setSuffix(" chars");
+    m_chunkSizeSpin->setValue(QSettings().value("rag/chunkSizeChars", 1500).toInt());
+    connect(m_chunkSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &SettingsDialog::onChunkSizeChanged);
+    chunkingLayout->addRow("Chunk size", m_chunkSizeSpin);
+
+    m_chunkOverlapSpin = new QSpinBox;
+    m_chunkOverlapSpin->setRange(0, 2000);
+    m_chunkOverlapSpin->setSingleStep(50);
+    m_chunkOverlapSpin->setSuffix(" chars");
+    m_chunkOverlapSpin->setValue(QSettings().value("rag/chunkOverlapChars", 200).toInt());
+    connect(m_chunkOverlapSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &SettingsDialog::onChunkOverlapChanged);
+    chunkingLayout->addRow("Chunk overlap", m_chunkOverlapSpin);
+
+    auto *chunkingHint = new QLabel(
+        "Only affects documents added from now on — changing this doesn't re-chunk documents "
+        "already in the knowledge base.");
+    chunkingHint->setWordWrap(true);
+    chunkingHint->setObjectName("settingsHintLabel");
+    chunkingLayout->addRow(chunkingHint);
+
+    kbPageLayout->addWidget(chunkingGroup);
+
+    auto *documentsGroup = new QGroupBox("Documents");
+    auto *documentsGroupLayout = new QVBoxLayout(documentsGroup);
+
+    auto *addDocumentsButton = new QPushButton("Add document(s)…");
+    connect(addDocumentsButton, &QPushButton::clicked, this, &SettingsDialog::onAddKbDocumentsClicked);
+    documentsGroupLayout->addWidget(addDocumentsButton, 0, Qt::AlignLeft);
+
+    m_kbIngestionProgressBar = new QProgressBar;
+    m_kbIngestionProgressBar->setRange(0, 100);
+    m_kbIngestionProgressBar->setTextVisible(false);
+    m_kbIngestionProgressBar->setFixedHeight(6);
+    m_kbIngestionProgressBar->setVisible(false);
+    documentsGroupLayout->addWidget(m_kbIngestionProgressBar);
+
+    m_kbIngestionStatusLabel = new QLabel;
+    m_kbIngestionStatusLabel->setObjectName("settingsHintLabel");
+    m_kbIngestionStatusLabel->setWordWrap(true);
+    m_kbIngestionStatusLabel->setVisible(false);
+    documentsGroupLayout->addWidget(m_kbIngestionStatusLabel);
+
+    m_kbDocumentsLayout = new QVBoxLayout;
+    m_kbDocumentsLayout->setSpacing(4);
+    documentsGroupLayout->addLayout(m_kbDocumentsLayout);
+    rebuildKbDocumentsList();
+
+    kbPageLayout->addWidget(documentsGroup);
+    kbPageLayout->addStretch();
+
+    if (m_ragIngestionController) {
+        connect(m_ragIngestionController, &RagIngestionController::progress,
+                this, &SettingsDialog::onKbIngestionProgress);
+        connect(m_ragIngestionController, &RagIngestionController::fileFinished,
+                this, &SettingsDialog::onKbIngestionFileFinished);
+        connect(m_ragIngestionController, &RagIngestionController::queueFinished,
+                this, &SettingsDialog::onKbIngestionQueueFinished);
+    }
 
     // --- Offload model — deliberately OUTSIDE the tab widget ---------------
     // Kept visible regardless of which tab is selected, rather than tucked
@@ -1903,6 +2002,173 @@ void SettingsDialog::onBraveApiKeyEdited()
     emit braveApiKeyChanged(key);
 }
 
+void SettingsDialog::onEmbeddingModelComboChanged(int index)
+{
+    const QString model = m_embeddingModelCombo->itemData(index).toString();
+    if (model.isEmpty())
+        QSettings().remove("rag/embeddingModel");
+    else
+        QSettings().setValue("rag/embeddingModel", model);
+    emit embeddingModelChanged(model);
+}
+
+void SettingsDialog::onChunkSizeChanged(int value)
+{
+    QSettings().setValue("rag/chunkSizeChars", value);
+}
+
+void SettingsDialog::onChunkOverlapChanged(int value)
+{
+    QSettings().setValue("rag/chunkOverlapChars", value);
+}
+
+void SettingsDialog::onAddKbDocumentsClicked()
+{
+    const QStringList paths = QFileDialog::getOpenFileNames(
+        this, "Add documents to knowledge base", QString(), DocumentTextExtractor::fileDialogFilter());
+    if (paths.isEmpty() || !m_ragIngestionController)
+        return;
+    m_ragIngestionController->ingestFiles(paths);
+}
+
+void SettingsDialog::onKbIngestionProgress(const QString &fileName, int chunkIndex, int chunkCount)
+{
+    m_kbIngestionProgressBar->setVisible(true);
+    m_kbIngestionStatusLabel->setVisible(true);
+    if (chunkCount <= 0) {
+        m_kbIngestionProgressBar->setRange(0, 0); // indeterminate — still extracting/chunking
+        m_kbIngestionStatusLabel->setText(QString("Reading \"%1\"…").arg(fileName));
+    } else {
+        m_kbIngestionProgressBar->setRange(0, chunkCount);
+        m_kbIngestionProgressBar->setValue(chunkIndex);
+        m_kbIngestionStatusLabel->setText(
+            QString("Embedding \"%1\": chunk %2/%3…").arg(fileName).arg(chunkIndex).arg(chunkCount));
+    }
+}
+
+void SettingsDialog::onKbIngestionFileFinished(const QString &fileName, bool success, const QString &errorMessage)
+{
+    rebuildKbDocumentsList(); // documents are searchable one at a time as each finishes, so refresh now, not just at queue end
+    if (!success) {
+        m_kbIngestionStatusLabel->setVisible(true);
+        m_kbIngestionStatusLabel->setText(QString("\"%1\" failed: %2").arg(fileName, errorMessage));
+    }
+}
+
+void SettingsDialog::onKbIngestionQueueFinished()
+{
+    m_kbIngestionProgressBar->setVisible(false);
+    m_kbIngestionProgressBar->setRange(0, 100); // reset out of the indeterminate (0,0) state for next time
+    // Leave m_kbIngestionStatusLabel showing the last file's outcome rather
+    // than clearing it — a failure message in particular is worth leaving
+    // visible until the next ingestion run overwrites or the dialog closes.
+}
+
+void SettingsDialog::refreshEmbeddingModelCombo()
+{
+    if (!m_embeddingModelCombo)
+        return;
+
+    QStringList embeddingModels;
+    for (auto it = m_modelCapabilities.constBegin(); it != m_modelCapabilities.constEnd(); ++it) {
+        if (it.value().contains("embedding"))
+            embeddingModels.append(it.key());
+    }
+    embeddingModels.sort(Qt::CaseInsensitive);
+
+    const QString previousSelection = m_embeddingModelCombo->currentData().toString();
+    const QString configuredModel = QSettings().value("rag/embeddingModel").toString();
+
+    const QSignalBlocker blocker(m_embeddingModelCombo);
+    m_embeddingModelCombo->clear();
+
+    if (embeddingModels.isEmpty()) {
+        m_embeddingModelCombo->addItem("No embedding models found", QString());
+        m_embeddingModelCombo->setEnabled(false);
+        return;
+    }
+
+    m_embeddingModelCombo->setEnabled(true);
+    for (const QString &model : embeddingModels)
+        m_embeddingModelCombo->addItem(model, model);
+
+    // Keep whatever was already selected in this combo if it's still valid,
+    // otherwise fall back to the persisted QSettings value — covers both
+    // "rebuilt after a new capability arrived, don't lose the user's pick"
+    // and "first build of this session, restore the saved choice."
+    const QString toSelect = embeddingModels.contains(previousSelection) ? previousSelection
+        : (embeddingModels.contains(configuredModel) ? configuredModel : QString());
+    if (!toSelect.isEmpty())
+        m_embeddingModelCombo->setCurrentIndex(m_embeddingModelCombo->findData(toSelect));
+}
+
+void SettingsDialog::clearKbDocumentsList()
+{
+    QVector<QPointer<QWidget>> removedWidgets;
+    QLayoutItem *item;
+    while ((item = m_kbDocumentsLayout->takeAt(0)) != nullptr) {
+        if (QWidget *widget = item->widget()) {
+            widget->deleteLater();
+            removedWidgets.append(widget);
+        }
+        delete item;
+    }
+    m_kbDocumentsStatusLabel = nullptr;
+
+    for (const QPointer<QWidget> &widget : removedWidgets) {
+        if (widget)
+            QCoreApplication::sendPostedEvents(widget, QEvent::DeferredDelete);
+    }
+}
+
+void SettingsDialog::rebuildKbDocumentsList()
+{
+    clearKbDocumentsList();
+
+    if (!m_ragStore || m_ragStore->isEmpty()) {
+        m_kbDocumentsStatusLabel = new QLabel(m_ragStore ? "No documents yet." : "Knowledge base unavailable.");
+        m_kbDocumentsStatusLabel->setStyleSheet("opacity: 0.6; font-weight: normal;");
+        m_kbDocumentsLayout->addWidget(m_kbDocumentsStatusLabel);
+        return;
+    }
+
+    for (const RagStore::DocumentInfo &doc : m_ragStore->listDocuments()) {
+        auto *row = new QWidget;
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+
+        auto *nameLabel = new QLabel(QString("%1  (%2 chunk%3)")
+                                          .arg(doc.fileName).arg(doc.chunkCount).arg(doc.chunkCount == 1 ? "" : "s"));
+        nameLabel->setStyleSheet("font-weight: normal;");
+        nameLabel->setToolTip(doc.ingestedAt.toString("MMM d, yyyy 'at' h:mm AP"));
+        rowLayout->addWidget(nameLabel, /*stretch=*/1);
+
+        auto *removeButton = new QPushButton("Remove");
+        removeButton->setObjectName("dangerButton");
+        const QString documentId = doc.id;
+        const QString fileName = doc.fileName;
+        connect(removeButton, &QPushButton::clicked, this, [this, documentId, fileName]() {
+            QMessageBox box(this);
+            box.setIcon(QMessageBox::Warning);
+            box.setWindowTitle("Remove document");
+            box.setText(QString("Remove \"%1\" from the knowledge base?").arg(fileName));
+            box.setInformativeText("Its chunks will no longer be searchable. This doesn't delete the original file.");
+            QPushButton *cancelButton = box.addButton(QMessageBox::Cancel);
+            QPushButton *confirmButton = box.addButton("Remove", QMessageBox::DestructiveRole);
+            confirmButton->setObjectName("dangerButton");
+            box.setDefaultButton(cancelButton);
+            box.exec();
+            if (box.clickedButton() != confirmButton)
+                return;
+            m_ragStore->removeDocument(documentId);
+            rebuildKbDocumentsList();
+        });
+        rowLayout->addWidget(removeButton);
+
+        m_kbDocumentsLayout->addWidget(row);
+    }
+}
+
 void SettingsDialog::onPullModelClicked()
 {
     const QString model = m_pullModelEdit->text().trimmed();
@@ -2082,6 +2348,8 @@ void SettingsDialog::onModelMetadataFetched(const QString &model, const ModelMet
     }
     if (!currentNames.isEmpty())
         rebuildInstalledModelsList(currentNames);
+
+    refreshEmbeddingModelCombo(); // this model may be the first (or another) embedding-capable one found
 }
 
 // Small row of monochrome icons summarizing a model's Ollama-reported

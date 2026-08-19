@@ -208,6 +208,22 @@ public:
     // string, surfaced as-is rather than special-cased).
     void deleteModel(const QString &model);
 
+    // Hits POST /api/embed with {"model": model, "input": texts} — Ollama's
+    // batch-capable embeddings endpoint (confirmed against a real 0.32.14
+    // server: accepts a JSON array for "input", returns one embedding per
+    // text in the same order under "embeddings"). texts.size() can be 1 (a
+    // single query embedding at retrieval time) or many (a batch of chunks
+    // during ingestion) — batching is handled server-side, this just passes
+    // the array straight through. requestId is echoed back on
+    // embeddingsFetched() so a caller issuing several concurrent batches
+    // (e.g. ingesting a large document) can tell them apart, same role as
+    // conversationId for sendChatMessage(). Calling model on one that lacks
+    // the "embedding" capability (see ModelMetadata::capabilities) fails
+    // with an empty outer vector — callers should check that capability
+    // before ever offering the model for this, rather than relying on this
+    // call to reject it usefully.
+    void requestEmbeddings(const QString &requestId, const QString &model, const QStringList &texts);
+
 signals:
     void reachable(bool isReachable);
     void modelsListed(const QStringList &modelNames);
@@ -271,6 +287,16 @@ signals:
     void modelPullFinished(const QString &model, bool success, const QString &error);
 
     void modelDeleted(const QString &model, bool success, const QString &error);
+
+    // One-shot result of requestEmbeddings(), echoing back its requestId.
+    // embeddings.size() == the number of input texts on success, in the
+    // same order; an empty vector means the request failed outright
+    // (network error, model not found, or a model that doesn't actually
+    // support embeddings — Ollama returns a real error for that last case
+    // rather than silently succeeding, but this signal doesn't distinguish
+    // *why* it failed, only that it did, matching this class's existing
+    // "0/empty means unknown/failed" convention elsewhere).
+    void embeddingsFetched(const QString &requestId, const QVector<QVector<float>> &embeddings);
 
 private:
     QNetworkAccessManager m_manager;

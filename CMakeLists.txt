@@ -7,7 +7,7 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia Svg WebEngineWidgets WebChannel)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network Multimedia Svg WebEngineWidgets WebChannel Sql Concurrent)
 
 add_executable(linollama
     src/main.cpp
@@ -23,6 +23,14 @@ add_executable(linollama
     src/BraveSearchClient.h
     src/StackOverflowSearchClient.cpp
     src/StackOverflowSearchClient.h
+    src/RagStore.cpp
+    src/RagStore.h
+    src/TextChunker.cpp
+    src/TextChunker.h
+    src/DocumentTextExtractor.cpp
+    src/DocumentTextExtractor.h
+    src/RagIngestionController.cpp
+    src/RagIngestionController.h
     src/VoiceRecorder.cpp
     src/VoiceRecorder.h
     src/WhisperManager.cpp
@@ -79,6 +87,8 @@ target_link_libraries(linollama
         Qt6::Svg
         Qt6::WebEngineWidgets
         Qt6::WebChannel
+        Qt6::Sql
+        Qt6::Concurrent
         ${CMAKE_DL_LIBS}
 )
 

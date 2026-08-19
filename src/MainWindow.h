@@ -17,6 +17,9 @@
 #include "ThemeManager.h"
 #include "WhisperManager.h"
 
+class RagStore;
+class RagIngestionController;
+
 // The main application window: a persistent top bar (new-conversation +
 // sidebar collapse/expand, both icon-only) above a resizable conversation
 // sidebar on the left (with a settings button pinned to its bottom-left),
@@ -37,6 +40,8 @@ public:
                ConversationStore *store,
                ThemeManager *themeManager,
                WhisperManager *whisperManager,
+               RagStore *ragStore,
+               RagIngestionController *ragIngestionController,
                QWidget *parent = nullptr);
 
     // Deletes the active conversation if it's still completely empty (see
@@ -164,6 +169,8 @@ private:
     OllamaClient *m_ollamaClient = nullptr;
     ThemeManager *m_themeManager = nullptr;
     WhisperManager *m_whisperManager = nullptr;
+    RagStore *m_ragStore = nullptr;
+    RagIngestionController *m_ragIngestionController = nullptr;
 
     QWidget *m_sidebar = nullptr; // the whole left pane, shown/hidden by setSidebarCollapsed()
     // Filters m_sidebarList by title/message content — see

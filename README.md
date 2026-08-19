@@ -68,7 +68,14 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
 - **Multiple conversations**, listed in a resizable sidebar (create via "+
   New conversation" or just start typing on the empty-state screen); delete
   via each row's hover "⋮" menu or right-click. Titles are auto-derived from
-  the first message.
+  the first message. A search box above the list filters by title *and*
+  message content (case-insensitive substring match).
+- **In-chat find** (`Ctrl+F`): a find bar for the currently open
+  conversation, searching every message (yours and the model's) — distinct
+  from the "Jump to…" button near the input box, which only lists your own
+  past prompts to scroll straight to. Enter/Shift+Enter or the ↓/↑ buttons
+  step through matches, which are also all highlighted at once; `Esc` or
+  the × closes it.
 - **Streaming replies**, rendered as Markdown (bold, lists, code blocks,
   tables, links) via Qt's native rich text engine — not raw `**bold**`
   source text.
@@ -105,9 +112,11 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   key, set in Settings → Inputs; stays disabled until one is configured),
   **Search Stack Overflow** (via the public Stack Exchange API — free,
   keyless, for programming questions/error messages specifically),
-  **Calculator** (exact arithmetic, `+ - * / % ^` and parentheses), and
-  **Current date & time**. Unlike a plain toggle that always runs before
-  sending, enabling
+  **Search knowledge base** (your own ingested documents — see "Knowledge
+  base (RAG)" below; stays disabled until an embedding model and at least
+  one document are configured), **Calculator** (exact arithmetic,
+  `+ - * / % ^` and parentheses), and **Current date & time**. Unlike a
+  plain toggle that always runs before sending, enabling
   one just makes it available (via Ollama's `tools` API) — the model
   itself decides, per reply, whether to actually call it, and can chain
   several calls before answering. Each call and its result show as a
@@ -141,6 +150,37 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   (`num_predict`), repeat penalty, and stop sequences, all gated by one
   "Use custom generation parameters" toggle. Off by default, in which case
   Ollama's own built-in defaults apply exactly as before.
+
+### 📚 Knowledge base (RAG)
+
+- **One global knowledge base**, shared across every conversation (not
+  per-chat) — set up in Settings → **Knowledge Base**. Ingest PDF, DOCX,
+  TXT, and MD files via "Add document(s)…"; each is split into overlapping
+  chunks (size/overlap configurable, default 1500/200 characters), embedded
+  through Ollama's `/api/embed` using a model you choose (any installed
+  model Ollama reports `"embedding"` support for — e.g.
+  `ollama pull nomic-embed-text`), and stored locally in a SQLite database
+  (`knowledge_base.sqlite`, see "Data & configuration" below). PDF text
+  extraction shells out to `pdftotext` (poppler-utils); DOCX extraction
+  shells out to `unzip` plus an internal XML walk — both need to be
+  installed (see Dependencies).
+- **Search knowledge base** tool (Tools menu, off by default, disabled
+  until an embedding model and at least one document are configured):
+  embeds the model's query, retrieves the 5 most similar chunks by cosine
+  similarity (brute-force — no external vector index, fine at the scale of
+  one person's own documents), and returns whichever are above a fixed
+  relevance threshold, each labeled with its source document and chunk
+  number.
+- Ingestion runs in the background (extraction/chunking on a worker
+  thread, embedding requests one batch at a time) and keeps going even if
+  you close Settings mid-download — reopen it to see progress or the
+  finished document list. A document already becomes searchable as soon as
+  *it* finishes, without waiting for the rest of a multi-file batch.
+- Remove a document from Settings' document list at any time — this only
+  drops it (and its chunks) from the knowledge base, it doesn't touch the
+  original file on disk.
+- Changing the chunk size/overlap only affects documents added afterward —
+  it doesn't retroactively re-chunk what's already ingested.
 
 ### 🎙️ Voice transcription
 
@@ -289,18 +329,24 @@ Qt6, plus a handful of its modules:
 
 ```bash
 sudo apt install build-essential cmake \
-    qt6-base-dev qt6-multimedia-dev qt6-svg-dev qt6-webengine-dev
+    qt6-base-dev qt6-multimedia-dev qt6-svg-dev qt6-webengine-dev \
+    libqt6sql6-sqlite poppler-utils unzip
 ```
 
 | Module | What it's for |
 |---|---|
-| `qt6-base-dev` | Core, Widgets, Network |
+| `qt6-base-dev` | Core, Widgets, Network, **Sql, Concurrent** (both part of qtbase, no separate dev package needed) |
 | `qt6-multimedia-dev` | Voice recording (push-to-talk capture) |
 | `qt6-svg-dev` | Themed SVG icon rendering |
 | `qt6-webengine-dev` | Embedded map view in chat replies |
+| `libqt6sql6-sqlite` | Runtime SQLite driver plugin for the knowledge base's vector store (Qt6::Sql itself is build-time only — this is what actually opens the `.sqlite` file) |
+| `poppler-utils` | `pdftotext` — PDF text extraction for knowledge-base ingestion |
+| `unzip` | DOCX text extraction (reads `word/document.xml` out of the `.docx` zip container) |
 
 No NVIDIA/AMD vendor SDK is needed at build time — GPU support is resolved
-entirely at runtime.
+entirely at runtime. `poppler-utils`/`unzip` are only needed to ingest PDF/
+DOCX files into the knowledge base — TXT/MD ingestion and everything else
+in the app works without them.
 
 ## 🏗️ Build & run
 
@@ -343,16 +389,24 @@ See Limitations if you move this checkout elsewhere afterward.
 - **Settings**: `~/.config/LinOllama/LinOllama.conf` (theme, accent/meter
   colors, send button style, context-length override, model-optimization
   toggle, Whisper binary/models-folder/selected-model paths, microphone
-  device, Brave Search API key, Ollama server environment overrides). Delete
-  this file to reset everything to defaults.
+  device, Brave Search API key, knowledge-base embedding model/chunk
+  size/overlap, Ollama server environment overrides). Delete this file to
+  reset everything to defaults.
+- **Knowledge base**: one SQLite database,
+  `~/.local/share/LinOllama/LinOllama/knowledge_base.sqlite`, holding every
+  ingested document's chunks and embedding vectors — see "Knowledge base
+  (RAG)" above. Removing a document through Settings deletes its rows;
+  deleting the file itself resets the knowledge base to empty.
 - **Systemd user drop-in** (only written if a systemd *user* `ollama.service`
   unit exists and at least one server environment override is set):
   `~/.config/systemd/user/ollama.service.d/override.conf`.
-- Nothing is sent anywhere except your configured Ollama server, your
-  selected microphone → the local whisper.cpp process (never leaves the
-  machine), and — only when a search tool is enabled *and* the model
-  actually decides to call it — the Brave Search API's or the Stack
-  Exchange API's public endpoints.
+- Nothing is sent anywhere except your configured Ollama server (chat
+  requests, and — only once you've ingested at least one document —
+  embedding requests for the knowledge base), your selected microphone →
+  the local whisper.cpp process (never leaves the machine), and — only
+  when a search tool is enabled *and* the model actually decides to call
+  it — the Brave Search API's or the Stack Exchange API's public
+  endpoints.
 
 ## ⛔ Known limitations
 
@@ -366,11 +420,19 @@ See Limitations if you move this checkout elsewhere afterward.
   Settings → Inputs. Without a key configured, the "Search the web" tool
   stays disabled rather than erroring on every call.
 - **Only built-in tools, no custom/user-defined ones.** Tool calling is
-  limited to the four tools LinOllama ships with — there's no Settings
+  limited to the five tools LinOllama ships with — there's no Settings
   UI yet for defining your own (e.g. a webhook-backed tool). A single turn
   also caps at 4 chained tool-call rounds before the app forces a final
   answer, as a guard against a model that keeps calling tools without ever
   actually answering.
+- **Knowledge base ingestion is PDF/DOCX/TXT/MD only** — legacy `.doc`
+  (binary Word format) and `.odt` aren't supported. It's also one global
+  knowledge base shared across every conversation, not scoped per-chat or
+  per-project — every `search_knowledge_base` call searches everything
+  you've ingested, regardless of which conversation it's called from.
+  Similarity search is a brute-force scan (no approximate/indexed search),
+  which is fine at a single person's realistic document scale but would
+  slow down noticeably with a very large corpus.
 - **Live transcription's chunking isn't tunable.** The silence-detection
   threshold and min/max chunk lengths (see "Voice transcription" above)
   are fixed constants, not exposed in Settings — a very quiet room/mic
@@ -496,6 +558,16 @@ Single Qt6 Widgets application, no QML. Key files:
 - `TrayApplication` — tray icon, menu, tooltip.
 - `Theme` / `ThemeManager` — the app's QSS stylesheet and light/dark/auto
   resolution.
+- `ToolExecutor` / `BuiltinTools` — dispatches and executes the model's
+  tool_calls (web search, Stack Overflow, calculator, date/time, knowledge
+  base) against each tool's backend.
+- `RagStore` — SQLite-backed knowledge-base storage (documents, chunks,
+  embeddings) and brute-force cosine-similarity retrieval.
+- `RagIngestionController` — drives the ingest pipeline (extract → chunk →
+  embed → store) for documents added via Settings → Knowledge Base.
+- `DocumentTextExtractor` / `TextChunker` — plain-text extraction (direct
+  read, `pdftotext`, or `unzip` + XML walk depending on file type) and
+  overlapping-chunk splitting for ingestion.
 
 No automated test suite exists yet; changes have generally been verified by
 building, running, and exercising the relevant feature manually.

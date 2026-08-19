@@ -29,12 +29,16 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
                         ConversationStore *store,
                         ThemeManager *themeManager,
                         WhisperManager *whisperManager,
+                        RagStore *ragStore,
+                        RagIngestionController *ragIngestionController,
                         QWidget *parent)
     : QMainWindow(parent)
     , m_store(store)
     , m_ollamaClient(ollamaClient)
     , m_themeManager(themeManager)
     , m_whisperManager(whisperManager)
+    , m_ragStore(ragStore)
+    , m_ragIngestionController(ragIngestionController)
 {
     setWindowTitle("Ollama GUI");
     resize(1280, 720);
@@ -164,7 +168,7 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     sidebarLayout->addWidget(m_settingsButton, 0, Qt::AlignLeft);
 
     // --- Chat -------------------------------------------------------------
-    m_chatWidget = new ChatWidget(ollamaClient, store, themeManager, whisperManager);
+    m_chatWidget = new ChatWidget(ollamaClient, store, themeManager, whisperManager, ragStore);
     connect(m_chatWidget, &ChatWidget::conversationTitleMayHaveChanged,
             this, &MainWindow::onConversationTitleMayHaveChanged);
     connect(m_chatWidget, &ChatWidget::conversationCreated,
@@ -373,7 +377,8 @@ void MainWindow::onModelsListed(const QStringList &modelNames)
 
 void MainWindow::onSettingsRequested()
 {
-    SettingsDialog dialog(m_themeManager, m_ollamaClient, m_store, m_whisperManager, this);
+    SettingsDialog dialog(m_themeManager, m_ollamaClient, m_store, m_whisperManager,
+                          m_ragStore, m_ragIngestionController, this);
     connect(&dialog, &SettingsDialog::sendButtonStyleChanged,
             m_chatWidget, &ChatWidget::setSendButtonStyle);
     connect(&dialog, &SettingsDialog::sendButtonFilledChanged,
@@ -394,6 +399,8 @@ void MainWindow::onSettingsRequested()
             m_chatWidget, &ChatWidget::refreshFormattingSettings);
     connect(&dialog, &SettingsDialog::braveApiKeyChanged,
             m_chatWidget, &ChatWidget::setBraveApiKey);
+    connect(&dialog, &SettingsDialog::embeddingModelChanged,
+            m_chatWidget, &ChatWidget::setEmbeddingModel);
     // The font-size scale (part of the same "Formatting" tab) affects the
     // sidebar's conversation list too — each row's QListWidgetItem has its
     // sizeHint fixed at construction time (see refreshSidebar()), so simply

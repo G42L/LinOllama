@@ -86,6 +86,30 @@ QJsonObject stackOverflowSearchDefinition()
     return QJsonObject{{"type", "function"}, {"function", function}};
 }
 
+QJsonObject searchKnowledgeBaseDefinition()
+{
+    QJsonObject params{
+        {"type", "object"},
+        {"properties", QJsonObject{
+            {"query", QJsonObject{
+                {"type", "string"},
+                {"description", "What to search for in the user's ingested documents."}
+            }}
+        }},
+        {"required", QJsonArray{"query"}}
+    };
+    QJsonObject function{
+        {"name", kSearchKnowledgeBase},
+        {"description", "Search the user's personal knowledge base of ingested documents (PDFs, "
+                         "Word docs, text/markdown files they've added in Settings) for passages "
+                         "relevant to a query. Use this when the user asks about the content of "
+                         "documents they've uploaded, or references something that sounds like "
+                         "it's from a specific document rather than general knowledge."},
+        {"parameters", params}
+    };
+    return QJsonObject{{"type", "function"}, {"function", function}};
+}
+
 QString currentDateTimeText()
 {
     return QLocale::system().toString(QDateTime::currentDateTime(), "dddd, yyyy-MM-dd HH:mm:ss t");

@@ -12,6 +12,9 @@
 #include "ConversationStore.h"
 #include "WhisperManager.h"
 
+class RagStore;
+class RagIngestionController;
+
 class QComboBox;
 class QVBoxLayout;
 class QLabel;
@@ -37,7 +40,9 @@ class SettingsDialog : public QDialog
 public:
     explicit SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaClient,
                              ConversationStore *conversationStore,
-                             WhisperManager *whisperManager, QWidget *parent = nullptr);
+                             WhisperManager *whisperManager,
+                             RagStore *ragStore, RagIngestionController *ragIngestionController,
+                             QWidget *parent = nullptr);
 
 signals:
     // Emitted live as soon as the "Send button" combo changes (the dialog
@@ -110,6 +115,12 @@ signals:
     // ("webSearch/braveApiKey") already happened by the time this fires.
     void braveApiKeyChanged(const QString &key);
 
+    // Emitted whenever the Knowledge Base tab's embedding-model combo
+    // changes — ChatWidget listens live and forwards it straight to
+    // ToolExecutor::setEmbeddingModel(). Persistence to QSettings
+    // ("rag/embeddingModel") already happened by the time this fires.
+    void embeddingModelChanged(const QString &model);
+
 private slots:
     void onThemeComboChanged(int index);
     void onThemeColorPresetChanged(int index);
@@ -148,6 +159,19 @@ private slots:
     void onOllamaNumParallelChanged(int value);
 
     void onBraveApiKeyEdited();
+
+    // Knowledge Base tab — see rebuildKbDocumentsList()/refreshEmbeddingModelCombo().
+    void onEmbeddingModelComboChanged(int index);
+    void onChunkSizeChanged(int value);
+    void onChunkOverlapChanged(int value);
+    void onAddKbDocumentsClicked();
+    // Connected to RagIngestionController's signals — see that class's own
+    // header for why ingestion keeps running even if this dialog is closed
+    // mid-batch (these slots just stop firing once the dialog is destroyed,
+    // same as any other Qt signal/slot connection whose receiver is gone).
+    void onKbIngestionProgress(const QString &fileName, int chunkIndex, int chunkCount);
+    void onKbIngestionFileFinished(const QString &fileName, bool success, const QString &errorMessage);
+    void onKbIngestionQueueFinished();
 
     // Persist straight to QSettings ("chat/*") — read fresh at send time by
     // ChatWidget::streamAssistantReplyForCurrentHistory() (same pattern as
@@ -368,6 +392,22 @@ private:
     void clearInstalledModelsList();
     QWidget *buildCapabilityIconsWidget(const QStringList &capabilities, bool dark);
 
+    // Rebuilds m_embeddingModelCombo from m_modelCapabilities — every
+    // installed model whose capabilities include "embedding", alphabetical.
+    // Reuses the same cache the Ollama tab's installed-models list already
+    // populates (see onModelMetadataFetched(), which calls this too) rather
+    // than issuing its own separate /api/show requests. Preserves the
+    // current selection if it's still in the filtered list; shows a
+    // disabled placeholder item ("No embedding models found — pull one,
+    // e.g. nomic-embed-text") if none qualify yet.
+    void refreshEmbeddingModelCombo();
+    // Same clear/rebuild-from-scratch pattern as clearInstalledModelsList()/
+    // rebuildInstalledModelsList() — one row per RagStore::listDocuments()
+    // entry (name, chunk count, ingested date, a "Remove" button), or a
+    // single "No documents yet" placeholder label.
+    void clearKbDocumentsList();
+    void rebuildKbDocumentsList();
+
     // Capability icons (thinking/vision/tools — see buildCapabilityIconsWidget())
     // shown after each installed model's name. Keyed by model name.
     // m_modelCapabilities caches OllamaClient::modelMetadataFetched()'s
@@ -391,4 +431,19 @@ private:
     QSpinBox *m_numPredictSpin = nullptr;
     QDoubleSpinBox *m_repeatPenaltySpin = nullptr;
     QLineEdit *m_stopSequencesEdit = nullptr;
+
+    // Knowledge Base tab — not owned, app-level shared instances (see
+    // main.cpp), same non-owning-pointer convention as m_ollamaClient.
+    RagStore *m_ragStore = nullptr;
+    RagIngestionController *m_ragIngestionController = nullptr;
+
+    QComboBox *m_embeddingModelCombo = nullptr;
+    QSpinBox *m_chunkSizeSpin = nullptr;
+    QSpinBox *m_chunkOverlapSpin = nullptr;
+
+    QVBoxLayout *m_kbDocumentsLayout = nullptr; // rows inserted/cleared here, same pattern as m_installedModelsLayout
+    QLabel *m_kbDocumentsStatusLabel = nullptr;
+
+    QProgressBar *m_kbIngestionProgressBar = nullptr;
+    QLabel *m_kbIngestionStatusLabel = nullptr;
 };

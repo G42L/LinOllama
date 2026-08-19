@@ -17,6 +17,7 @@ constexpr const char *kWebSearch = "web_search";
 constexpr const char *kCalculate = "calculate";
 constexpr const char *kCurrentDateTime = "get_current_datetime";
 constexpr const char *kStackOverflowSearch = "search_stackoverflow";
+constexpr const char *kSearchKnowledgeBase = "search_knowledge_base";
 
 // Each returns one entry of the /api/chat "tools" array (the
 // {"type": "function", "function": {...}} wrapper Ollama expects) — see
@@ -26,6 +27,7 @@ QJsonObject webSearchDefinition();
 QJsonObject calculateDefinition();
 QJsonObject currentDateTimeDefinition();
 QJsonObject stackOverflowSearchDefinition();
+QJsonObject searchKnowledgeBaseDefinition();
 
 // Evaluates a plain arithmetic expression (+, -, *, /, %, ^, parentheses,
 // unary minus, decimal numbers — no variables or functions, since the
