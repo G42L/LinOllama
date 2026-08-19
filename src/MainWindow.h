@@ -6,6 +6,8 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QSplitter>
+#include <QLineEdit>
+#include <QTimer>
 
 #include "SystemMonitor.h"
 #include "OllamaClient.h"
@@ -59,6 +61,10 @@ private slots:
     void onConversationTitleMayHaveChanged(const QString &conversationId);
     void onChatConversationCreated(const QString &conversationId);
     void onSidebarContextMenuRequested(const QPoint &pos);
+    // Restarts m_sidebarSearchDebounceTimer on every keystroke in
+    // m_sidebarSearchEdit — see the timer's own comment for why filtering
+    // is debounced rather than applied straight from textChanged().
+    void onSidebarSearchTextChanged(const QString &text);
     // Double-clicking a sidebar row is a third entry point into the same
     // rename flow as the context menu's "Rename…" and the row's own "⋮"
     // menu — see promptRenameConversation().
@@ -100,6 +106,12 @@ private:
     // ConversationListItemWidget's own eliding logic). Called after
     // rebuilding the list and on every list resize (see eventFilter()).
     void updateSidebarItemWidths();
+
+    // True if conv should be shown under the current sidebar search filter
+    // — matches on title OR any message's content (case-insensitive plain
+    // substring, not a query language). Called from refreshSidebar()'s own
+    // rebuild loop; an empty filter always matches everything.
+    bool conversationMatchesFilter(const Conversation &conv, const QString &filter) const;
 
     // Applies the given collapsed state: hides/shows the whole sidebar pane
     // (remembering its expanded width so re-expanding restores it, rather
@@ -154,6 +166,19 @@ private:
     WhisperManager *m_whisperManager = nullptr;
 
     QWidget *m_sidebar = nullptr; // the whole left pane, shown/hidden by setSidebarCollapsed()
+    // Filters m_sidebarList by title/message content — see
+    // conversationMatchesFilter() and refreshSidebar(). Sits above the list,
+    // inside the sidebar pane (so it collapses/hides along with it).
+    QLineEdit *m_sidebarSearchEdit = nullptr;
+    QString m_sidebarSearchFilter;
+    // Debounces m_sidebarSearchEdit's textChanged() before it triggers a
+    // full refreshSidebar() rebuild — refreshSidebar() reallocates one
+    // ConversationListItemWidget per visible conversation on every call, so
+    // firing it on every single keystroke of a fast typist would be wasteful
+    // (each is a full widget-tree rebuild, not just a filter pass). 150ms
+    // single-shot, restarted on each keystroke, same idea as any other
+    // "wait for typing to pause" debounce.
+    QTimer *m_sidebarSearchDebounceTimer = nullptr;
     QListWidget *m_sidebarList = nullptr;
     // All three live in the persistent top bar (not the sidebar pane
     // itself), icon-only, left to right: new conversation, sidebar

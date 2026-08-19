@@ -124,6 +124,19 @@ MainWindow::MainWindow(SystemMonitor *systemMonitor,
     sidebarLayout->setContentsMargins(8, 8, 8, 8);
     sidebarLayout->setSpacing(6);
 
+    m_sidebarSearchEdit = new QLineEdit;
+    m_sidebarSearchEdit->setObjectName("sidebarSearch");
+    m_sidebarSearchEdit->setPlaceholderText("Search conversations…");
+    m_sidebarSearchEdit->setClearButtonEnabled(true);
+    connect(m_sidebarSearchEdit, &QLineEdit::textChanged,
+            this, &MainWindow::onSidebarSearchTextChanged);
+    sidebarLayout->addWidget(m_sidebarSearchEdit);
+
+    m_sidebarSearchDebounceTimer = new QTimer(this);
+    m_sidebarSearchDebounceTimer->setSingleShot(true);
+    m_sidebarSearchDebounceTimer->setInterval(150);
+    connect(m_sidebarSearchDebounceTimer, &QTimer::timeout, this, &MainWindow::refreshSidebar);
+
     m_sidebarList = new QListWidget;
     m_sidebarList->setFrameShape(QFrame::NoFrame);
     // Long titles are elided (see ConversationListItemWidget), not
@@ -305,7 +318,24 @@ void MainWindow::selectSidebarRow(const QString &id)
     for (int i = 0; i < m_sidebarList->count(); ++i) {
         if (m_sidebarList->item(i)->data(Qt::UserRole).toString() == id) {
             m_sidebarList->setCurrentRow(i);
-            break;
+            return;
+        }
+    }
+
+    // Not found under the current sidebar search filter — this happens when
+    // a conversation was just created/imported/auto-created while a filter
+    // was active and its title/content doesn't happen to match it (e.g. a
+    // brand-new "New conversation"). Clearing the filter and retrying once
+    // is better than silently failing to select anything, which would read
+    // as new-conversation/import just not working.
+    if (!m_sidebarSearchFilter.isEmpty()) {
+        m_sidebarSearchEdit->clear(); // synchronously updates m_sidebarSearchFilter via textChanged()
+        refreshSidebar();
+        for (int i = 0; i < m_sidebarList->count(); ++i) {
+            if (m_sidebarList->item(i)->data(Qt::UserRole).toString() == id) {
+                m_sidebarList->setCurrentRow(i);
+                return;
+            }
         }
     }
 }
@@ -643,6 +673,23 @@ void MainWindow::confirmAndDeleteConversation(const QString &conversationId, con
     m_store->deleteConversation(conversationId);
 }
 
+void MainWindow::onSidebarSearchTextChanged(const QString &text)
+{
+    m_sidebarSearchFilter = text.trimmed();
+    m_sidebarSearchDebounceTimer->start(); // restarts if already running
+}
+
+bool MainWindow::conversationMatchesFilter(const Conversation &conv, const QString &filter) const
+{
+    if (conv.title.contains(filter, Qt::CaseInsensitive))
+        return true;
+    for (const ChatMessage &msg : conv.messages) {
+        if (msg.content.contains(filter, Qt::CaseInsensitive))
+            return true;
+    }
+    return false;
+}
+
 void MainWindow::refreshSidebar()
 {
     m_updatingSidebarProgrammatically = true;
@@ -653,6 +700,9 @@ void MainWindow::refreshSidebar()
 
     m_sidebarList->clear();
     for (const Conversation &conv : m_store->conversations()) {
+        if (!m_sidebarSearchFilter.isEmpty() && !conversationMatchesFilter(conv, m_sidebarSearchFilter))
+            continue;
+
         auto *item = new QListWidgetItem;
         item->setData(Qt::UserRole, conv.id);
 
