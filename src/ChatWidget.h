@@ -91,6 +91,16 @@ public:
     // onSendClicked() right away, same as this feature's original behavior.
     void setVoiceAutoSend(bool enabled);
 
+    // Mirrors the Brave Search API key (Settings → Inputs) into
+    // m_toolExecutor, which actually makes the web_search network calls.
+    // Called once at construction (reading the persisted value) and again
+    // live whenever Settings changes it, same "caller persists, this just
+    // applies" pattern as setSendButtonStyle() above. Also re-validates
+    // m_webSearchAction's enabled state, since an emptied-out key should
+    // turn the tool back off rather than leave it checked but broken (see
+    // onWebSearchToggled()).
+    void setBraveApiKey(const QString &key);
+
     // Re-reads "chat/useCustomContextLength"/"chat/customContextLength"
     // from QSettings and refreshes the context-usage bar accordingly —
     // called live when SettingsDialog's context-length checkbox/slider

@@ -22,9 +22,9 @@ QJsonObject webSearchDefinition()
     };
     QJsonObject function{
         {"name", kWebSearch},
-        {"description", "Search Wikipedia for background/factual information on a topic. "
-                         "Best for encyclopedic or historical questions, not for current events, "
-                         "news, or anything requiring live/real-time data."},
+        {"description", "Search the web for current information, news, or general facts on any "
+                         "topic. Use this whenever the answer might depend on recent/real-time "
+                         "information you wouldn't otherwise know."},
         {"parameters", params}
     };
     return QJsonObject{{"type", "function"}, {"function", function}};

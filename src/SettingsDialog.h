@@ -104,6 +104,12 @@ signals:
     // Persistence already happened by the time this fires.
     void formattingSettingsChanged();
 
+    // Emitted whenever the Brave Search API key field finishes editing —
+    // ChatWidget listens live and forwards it straight to
+    // ToolExecutor::setBraveApiKey(). Persistence to QSettings
+    // ("webSearch/braveApiKey") already happened by the time this fires.
+    void braveApiKeyChanged(const QString &key);
+
 private slots:
     void onThemeComboChanged(int index);
     void onThemeColorPresetChanged(int index);
@@ -140,6 +146,8 @@ private slots:
     void onOllamaKeepAliveEdited();
     void onOllamaFlashAttentionToggled(bool enabled);
     void onOllamaNumParallelChanged(int value);
+
+    void onBraveApiKeyEdited();
 
     // Persist straight to QSettings ("chat/*") — read fresh at send time by
     // ChatWidget::streamAssistantReplyForCurrentHistory() (same pattern as
@@ -332,6 +340,9 @@ private:
     // on its own.
     QSlider *m_meterSmoothingSlider = nullptr;
     QLabel *m_meterSmoothingValueLabel = nullptr;
+
+    // Inputs tab's "Web Search" group — see onBraveApiKeyEdited().
+    QLineEdit *m_braveApiKeyEdit = nullptr;
 
     // Ollama tab's "Server environment" group — see the onOllama*() slots.
     QLineEdit *m_ollamaModelsPathEdit = nullptr;

@@ -824,6 +824,29 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     micGroupLayout->addWidget(meterSmoothingHint);
 
     inputsPageLayout->addWidget(micGroup);
+
+    // --- Inputs tab: Web Search -----------------------------------------
+    auto *webSearchGroup = new QGroupBox("Web Search");
+    auto *webSearchGroupLayout = new QVBoxLayout(webSearchGroup);
+
+    auto *braveKeyRow = new QHBoxLayout;
+    braveKeyRow->addWidget(new QLabel("Brave Search API key"));
+    m_braveApiKeyEdit = new QLineEdit(QSettings().value("webSearch/braveApiKey").toString());
+    m_braveApiKeyEdit->setEchoMode(QLineEdit::Password);
+    m_braveApiKeyEdit->setPlaceholderText("Required to enable the \"Search the web\" tool");
+    connect(m_braveApiKeyEdit, &QLineEdit::editingFinished,
+            this, &SettingsDialog::onBraveApiKeyEdited);
+    braveKeyRow->addWidget(m_braveApiKeyEdit, /*stretch=*/1);
+    webSearchGroupLayout->addLayout(braveKeyRow);
+
+    auto *braveKeyHint = new QLabel(
+        "Get a free API key at brave.com/search/api (2,000 queries/month on the free tier). "
+        "Without a key, the \"Search the web\" tool stays disabled.");
+    braveKeyHint->setWordWrap(true);
+    braveKeyHint->setObjectName("settingsHintLabel");
+    webSearchGroupLayout->addWidget(braveKeyHint);
+
+    inputsPageLayout->addWidget(webSearchGroup);
     inputsPageLayout->addStretch();
 
     // --- Whisper tab: Voice transcription -----------------------------------
@@ -1868,6 +1891,16 @@ void SettingsDialog::onOllamaNumParallelChanged(int value)
     // stored as 0 either way, ServerController::configuredEnvironmentOverrides()
     // is what actually treats <= 0 as "omit this variable."
     QSettings().setValue("ollamaServer/numParallel", value);
+}
+
+void SettingsDialog::onBraveApiKeyEdited()
+{
+    const QString key = m_braveApiKeyEdit->text().trimmed();
+    if (key.isEmpty())
+        QSettings().remove("webSearch/braveApiKey");
+    else
+        QSettings().setValue("webSearch/braveApiKey", key);
+    emit braveApiKeyChanged(key);
 }
 
 void SettingsDialog::onPullModelClicked()

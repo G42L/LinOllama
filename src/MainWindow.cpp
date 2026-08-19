@@ -362,6 +362,8 @@ void MainWindow::onSettingsRequested()
             m_chatWidget, &ChatWidget::refreshMeterSmoothing);
     connect(&dialog, &SettingsDialog::formattingSettingsChanged,
             m_chatWidget, &ChatWidget::refreshFormattingSettings);
+    connect(&dialog, &SettingsDialog::braveApiKeyChanged,
+            m_chatWidget, &ChatWidget::setBraveApiKey);
     // The font-size scale (part of the same "Formatting" tab) affects the
     // sidebar's conversation list too — each row's QListWidgetItem has its
     // sizeHint fixed at construction time (see refreshSidebar()), so simply

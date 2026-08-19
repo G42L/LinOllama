@@ -30,6 +30,17 @@ class ToolExecutor : public QObject
 public:
     explicit ToolExecutor(QObject *parent = nullptr);
 
+    // Key used to authenticate web_search calls against the Brave Search
+    // API (see BraveSearchClient). Settings' "Inputs" tab is the source of
+    // truth; the caller (ChatWidget) mirrors it here whenever it changes,
+    // including once at startup. An empty key isn't specially handled
+    // here — ChatWidget is responsible for not letting web_search be
+    // enabled in the first place while no key is configured (see its own
+    // Tools-menu toggle), so a call reaching this class with an empty key
+    // shouldn't normally happen; if it does anyway, BraveSearchClient's own
+    // 401/403 handling reports it as an actionable error.
+    void setBraveApiKey(const QString &key) { m_braveApiKey = key; }
+
     // Starts executing every call in toolCalls for conversationId. Replaces
     // any batch already in flight for that same conversationId (shouldn't
     // normally happen — ChatWidget only starts one tool round at a time per
@@ -60,4 +71,5 @@ private:
     // Keyed by conversationId — one in-flight batch per conversation, same
     // one-per-key convention as OllamaClient's m_chatStreams.
     QHash<QString, Batch> m_batchesByConversation;
+    QString m_braveApiKey;
 };

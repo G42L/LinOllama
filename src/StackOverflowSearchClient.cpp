@@ -12,7 +12,8 @@
 namespace {
 
 // Excerpts come back with <b> highlighting around matched terms and HTML
-// entities — same reasoning/approach as WebSearchClient's own stripHtml().
+// entities — same reasoning/approach as the app's other search clients'
+// own stripHtml() helpers.
 QString stripHtml(const QString &fragment)
 {
     QTextDocument doc;

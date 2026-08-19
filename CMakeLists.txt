@@ -19,8 +19,8 @@ add_executable(linollama
     src/OllamaClient.h
     src/ChatQueue.cpp
     src/ChatQueue.h
-    src/WebSearchClient.cpp
-    src/WebSearchClient.h
+    src/BraveSearchClient.cpp
+    src/BraveSearchClient.h
     src/StackOverflowSearchClient.cpp
     src/StackOverflowSearchClient.h
     src/VoiceRecorder.cpp

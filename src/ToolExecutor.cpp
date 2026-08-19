@@ -1,6 +1,6 @@
 #include "ToolExecutor.h"
 #include "BuiltinTools.h"
-#include "WebSearchClient.h"
+#include "BraveSearchClient.h"
 #include "StackOverflowSearchClient.h"
 
 ToolExecutor::ToolExecutor(QObject *parent) : QObject(parent) {}
@@ -30,14 +30,14 @@ void ToolExecutor::executeToolCalls(const QString &conversationId, const QJsonAr
             completeCall(conversationId, i, name, arguments, BuiltinTools::currentDateTimeText());
         } else if (name == BuiltinTools::kWebSearch) {
             const QString query = arguments.value("query").toString();
-            // One WebSearchClient per call rather than a shared member —
+            // One BraveSearchClient per call rather than a shared member —
             // searchCompleted() doesn't carry a call index, so this is the
             // simplest way to keep concurrent searches from being confused
             // with each other. Small per-call overhead, but tool calls are
             // rare enough (one /api/chat round trip each) for that not to
             // matter.
-            auto *client = new WebSearchClient(this);
-            connect(client, &WebSearchClient::searchCompleted, this,
+            auto *client = new BraveSearchClient(m_braveApiKey, this);
+            connect(client, &BraveSearchClient::searchCompleted, this,
                     [this, conversationId, i, name, arguments, client](const QString &, const QString &resultsText) {
                         client->deleteLater();
                         completeCall(conversationId, i, name, arguments,

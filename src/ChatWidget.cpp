@@ -28,6 +28,8 @@
 #include <QDebug>
 #include <QMessageBox>
 #include <QSignalBlocker>
+#include <QToolTip>
+#include <QCursor>
 
 ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
                        WhisperManager *whisperManager, QWidget *parent)
@@ -203,7 +205,7 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     // color halo showing past the QSS-rounded corners (Theme.cpp's
     // QMenu { border-radius: 8px; }).
     toolsMenu->setAttribute(Qt::WA_TranslucentBackground);
-    m_webSearchAction = toolsMenu->addAction("Search Wikipedia");
+    m_webSearchAction = toolsMenu->addAction("Search the web");
     m_webSearchAction->setCheckable(true);
     m_webSearchAction->setChecked(m_webSearchEnabled);
     connect(m_webSearchAction, &QAction::toggled, this, &ChatWidget::onWebSearchToggled);
@@ -235,6 +237,7 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_toolExecutor = new ToolExecutor(this);
     connect(m_toolExecutor, &ToolExecutor::toolCallCompleted, this, &ChatWidget::onToolCallCompleted);
     connect(m_toolExecutor, &ToolExecutor::allToolCallsCompleted, this, &ChatWidget::onAllToolCallsCompleted);
+    m_toolExecutor->setBraveApiKey(QSettings().value("webSearch/braveApiKey").toString());
 
     toolLayout->addStretch(1);
 
@@ -431,6 +434,21 @@ void ChatWidget::setSendButtonFilled(bool filled)
 void ChatWidget::setVoiceAutoSend(bool enabled)
 {
     m_voiceAutoSend = enabled;
+}
+
+void ChatWidget::setBraveApiKey(const QString &key)
+{
+    m_toolExecutor->setBraveApiKey(key);
+    // Defensive second gate alongside onWebSearchToggled()'s own check: if
+    // the key was cleared out from under an already-enabled tool, turn it
+    // back off rather than let an in-flight conversation keep sending
+    // web_search calls that are now guaranteed to fail.
+    if (key.isEmpty() && m_webSearchEnabled) {
+        const QSignalBlocker blocker(m_webSearchAction);
+        m_webSearchAction->setChecked(false);
+        m_webSearchEnabled = false;
+        updateToolsButtonAppearance();
+    }
 }
 
 void ChatWidget::refreshContextLengthSetting()
@@ -2000,6 +2018,21 @@ void ChatWidget::onJumpToClicked()
 
 void ChatWidget::onWebSearchToggled(bool enabled)
 {
+    // Enabling with no Brave API key configured would just mean every
+    // web_search call comes back as an auth error (see BraveSearchClient),
+    // which the model tends to retry a round or two before giving up —
+    // wasted tokens for something the user could've avoided seeing as an
+    // option in the first place. So: block the enable, revert the checkbox,
+    // and point at Settings instead of letting it through.
+    if (enabled && QSettings().value("webSearch/braveApiKey").toString().isEmpty()) {
+        {
+            const QSignalBlocker blocker(m_webSearchAction);
+            m_webSearchAction->setChecked(false);
+        }
+        m_webSearchAction->setToolTip("Add a Brave Search API key in Settings → Inputs to enable web search.");
+        QToolTip::showText(QCursor::pos(), m_webSearchAction->toolTip(), m_toolsButton);
+        return;
+    }
     m_webSearchEnabled = enabled;
     updateToolsButtonAppearance();
 }
@@ -2032,7 +2065,7 @@ void ChatWidget::updateToolsButtonAppearance()
 {
     QStringList activeParts;
     if (m_webSearchEnabled)
-        activeParts << "Wiki";
+        activeParts << "Web";
     if (m_stackOverflowEnabled)
         activeParts << "SO";
     if (m_calculatorEnabled)

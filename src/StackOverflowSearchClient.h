@@ -6,8 +6,10 @@
 // Search backend for the "Search Stack Overflow" tool — backed by the
 // public Stack Exchange API (api.stackexchange.com), which unlike a general
 // web search engine is free, keyless, and explicitly meant for exactly this
-// kind of programmatic use (same reasoning as WebSearchClient's own
-// Wikipedia choice, see its header comment). Scoped to Stack Overflow only,
+// kind of programmatic use — kept as a dedicated tool alongside the general
+// Brave-backed web_search (see BraveSearchClient) since Stack Exchange's
+// excerpt search returns better-targeted programming Q&A snippets than a
+// generic web search would for the same query. Scoped to Stack Overflow only,
 // not the wider Stack Exchange network (Super User, Server Fault, etc.) —
 // easy to widen later (site= is just a query parameter) if that turns out
 // to matter.

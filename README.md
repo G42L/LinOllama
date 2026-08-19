@@ -100,12 +100,14 @@ Unlike web-based clients, LinOllama is designed to feel like a true desktop appl
   read and appended to your message as context (skipped if they look
   binary); images (`png/jpg/jpeg/gif/bmp/webp`) are base64-encoded and sent
   via Ollama's vision `images` field, for models that support it.
-- **Tool calling**: "Tools" toggles for **Search Wikipedia** (not a
-  general web search engine, see Limitations), **Search Stack Overflow**
-  (via the public Stack Exchange API — free, keyless, for programming
-  questions/error messages specifically), **Calculator** (exact
-  arithmetic, `+ - * / % ^` and parentheses), and **Current date &
-  time**. Unlike a plain toggle that always runs before sending, enabling
+- **Tool calling**: "Tools" toggles for **Search the web** (via the
+  [Brave Search API](https://brave.com/search/api/) — requires a free API
+  key, set in Settings → Inputs; stays disabled until one is configured),
+  **Search Stack Overflow** (via the public Stack Exchange API — free,
+  keyless, for programming questions/error messages specifically),
+  **Calculator** (exact arithmetic, `+ - * / % ^` and parentheses), and
+  **Current date & time**. Unlike a plain toggle that always runs before
+  sending, enabling
   one just makes it available (via Ollama's `tools` API) — the model
   itself decides, per reply, whether to actually call it, and can chain
   several calls before answering. Each call and its result show as a
@@ -341,16 +343,16 @@ See Limitations if you move this checkout elsewhere afterward.
 - **Settings**: `~/.config/LinOllama/LinOllama.conf` (theme, accent/meter
   colors, send button style, context-length override, model-optimization
   toggle, Whisper binary/models-folder/selected-model paths, microphone
-  device, Ollama server environment overrides). Delete this file to reset
-  everything to defaults.
+  device, Brave Search API key, Ollama server environment overrides). Delete
+  this file to reset everything to defaults.
 - **Systemd user drop-in** (only written if a systemd *user* `ollama.service`
   unit exists and at least one server environment override is set):
   `~/.config/systemd/user/ollama.service.d/override.conf`.
 - Nothing is sent anywhere except your configured Ollama server, your
   selected microphone → the local whisper.cpp process (never leaves the
   machine), and — only when a search tool is enabled *and* the model
-  actually decides to call it — Wikipedia's or the Stack Exchange API's
-  public endpoints.
+  actually decides to call it — the Brave Search API's or the Stack
+  Exchange API's public endpoints.
 
 ## ⛔ Known limitations
 
@@ -358,11 +360,11 @@ See Limitations if you move this checkout elsewhere afterward.
   an existing `whisper-cli` binary and can download *models*, but you still
   need to clone and build whisper.cpp yourself first — see Requirements.
   Also CPU-only: there's no GPU-acceleration toggle for transcription.
-- **Web search is Wikipedia-only.** It's a genuinely useful "look this up"
-  tool, but it is not a general web search engine — general search engines
-  either block non-browser API access or require a paid key, and adding one
-  (e.g. Brave Search) would need a user-supplied API key in Settings, which
-  isn't built yet.
+- **Web search requires a Brave Search API key.** General search engines
+  either block non-browser API access or require a paid/free-tier key —
+  Brave's free tier (2,000 queries/month) is what this app uses, set in
+  Settings → Inputs. Without a key configured, the "Search the web" tool
+  stays disabled rather than erroring on every call.
 - **Only built-in tools, no custom/user-defined ones.** Tool calling is
   limited to the four tools LinOllama ships with — there's no Settings
   UI yet for defining your own (e.g. a webhook-backed tool). A single turn
