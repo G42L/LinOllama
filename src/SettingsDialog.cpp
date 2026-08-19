@@ -770,6 +770,7 @@ SettingsDialog::SettingsDialog(ThemeManager *themeManager, OllamaClient *ollamaC
     ollamaPageLayout->addWidget(modelsGroup);
 
     connect(m_ollamaClient, &OllamaClient::modelsListed, this, &SettingsDialog::onInstalledModelsListed);
+    connect(m_ollamaClient, &OllamaClient::modelMetadataFetched, this, &SettingsDialog::onModelMetadataFetched);
     connect(m_ollamaClient, &OllamaClient::modelPullProgress, this, &SettingsDialog::onModelPullProgress);
     connect(m_ollamaClient, &OllamaClient::modelPullFinished, this, &SettingsDialog::onModelPullFinished);
     connect(m_ollamaClient, &OllamaClient::modelDeleted, this, &SettingsDialog::onModelDeleted);
@@ -1992,8 +1993,21 @@ void SettingsDialog::rebuildInstalledModelsList(const QStringList &modelNames)
         rowLayout->setContentsMargins(0, 0, 0, 0);
 
         auto *nameLabel = new QLabel(name);
+        nameLabel->setObjectName("installedModelNameLabel"); // see onModelMetadataFetched()'s row-name lookup
         nameLabel->setStyleSheet("font-weight: normal;");
         rowLayout->addWidget(nameLabel, /*stretch=*/1);
+
+        const bool dark = m_themeManager && m_themeManager->isDarkActive();
+        if (QWidget *capsWidget = buildCapabilityIconsWidget(m_modelCapabilities.value(name), dark))
+            rowLayout->addWidget(capsWidget);
+
+        // Capabilities aren't in /api/tags' response — fetch them lazily via
+        // /api/show, once per model per session (see m_capabilitiesRequestedFor's
+        // own comment), rather than on every 3s modelsListed() poll.
+        if (!m_capabilitiesRequestedFor.contains(name)) {
+            m_capabilitiesRequestedFor.insert(name);
+            m_ollamaClient->fetchModelContextLength(name);
+        }
 
         auto *deleteButton = new QPushButton("Delete");
         deleteButton->setObjectName("dangerButton"); // red styling, same as the conversation-delete confirmation elsewhere
@@ -2016,6 +2030,74 @@ void SettingsDialog::rebuildInstalledModelsList(const QStringList &modelNames)
 
         m_installedModelsLayout->addWidget(row);
     }
+}
+
+void SettingsDialog::onModelMetadataFetched(const QString &model, const ModelMetadata &metadata)
+{
+    m_modelCapabilities.insert(model, metadata.capabilities);
+
+    // Refresh now rather than waiting for the next 3s modelsListed() poll,
+    // so the icons appear as soon as this model's /api/show answers. Reuses
+    // the installed-models rebuild rather than patching just this one row,
+    // same simple full-rebuild approach the rest of this list already uses.
+    QStringList currentNames;
+    for (int i = 0; i < m_installedModelsLayout->count(); ++i) {
+        if (QWidget *row = m_installedModelsLayout->itemAt(i)->widget()) {
+            if (auto *nameLabel = row->findChild<QLabel *>("installedModelNameLabel"))
+                currentNames.append(nameLabel->text());
+        }
+    }
+    if (!currentNames.isEmpty())
+        rebuildInstalledModelsList(currentNames);
+}
+
+// Small row of monochrome icons summarizing a model's Ollama-reported
+// capabilities (from /api/show's "capabilities" array — see ModelMetadata),
+// shown after its name in the installed-models list. Only the capabilities
+// most relevant to how a model can be used in this app get an icon; others
+// (e.g. "completion", "insert", "embedding") are left unrepresented since
+// they're either implied (every chat model can complete) or not something
+// this app's UI exposes. Returns nullptr if capabilities is empty (nothing
+// fetched yet, or the model genuinely reports none) so callers can skip
+// adding an empty widget.
+QWidget *SettingsDialog::buildCapabilityIconsWidget(const QStringList &capabilities, bool dark)
+{
+    if (capabilities.isEmpty())
+        return nullptr;
+
+    struct CapabilityIcon
+    {
+        const char *capability;
+        const char *iconPath;
+        const char *tooltip;
+    };
+    static const CapabilityIcon kKnownCapabilities[] = {
+        {"thinking", ":/icons/thinking.svg", "Supports reasoning (\"thinking\") output"},
+        {"vision", ":/icons/eye.svg", "Supports image input (vision)"},
+        {"tools", ":/icons/wrench.svg", "Supports tool calling"},
+    };
+
+    auto *container = new QWidget;
+    auto *layout = new QHBoxLayout(container);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+
+    bool addedAny = false;
+    for (const CapabilityIcon &known : kKnownCapabilities) {
+        if (!capabilities.contains(QString::fromLatin1(known.capability)))
+            continue;
+        auto *iconLabel = new QLabel;
+        iconLabel->setPixmap(Theme::loadThemedIcon(known.iconPath, dark, 14, "secondaryText").pixmap(14, 14));
+        iconLabel->setToolTip(known.tooltip);
+        layout->addWidget(iconLabel);
+        addedAny = true;
+    }
+
+    if (!addedAny) {
+        delete container;
+        return nullptr;
+    }
+    return container;
 }
 
 void SettingsDialog::onGenParamsToggled(bool enabled)

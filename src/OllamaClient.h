@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QVector>
 #include <QHash>
+#include <QStringList>
 #include <climits>
 
 // Sentinel for sendChatMessage()'s keepAliveSeconds parameter meaning "don't
@@ -29,11 +30,18 @@ struct LoadedModelInfo
 // determined (server unreachable, or a model whose metadata doesn't expose
 // these fields). Shown as-is (e.g. "7B", "Q4_K_M") rather than parsed
 // further, since Ollama doesn't document a fixed enum for either.
+// capabilities is /api/show's top-level "capabilities" array verbatim (e.g.
+// "completion", "tools", "insert", "vision", "thinking", "embedding" —
+// Ollama's own strings, not translated further here). Empty means either
+// "couldn't be determined" (same as the other fields, see isEmpty() below)
+// or a genuinely capability-less/older model — those two cases aren't
+// distinguished, same as this struct's other fields.
 struct ModelMetadata
 {
     QString family;
     QString parameterSize;
     QString quantizationLevel;
+    QStringList capabilities;
 
     bool isEmpty() const { return family.isEmpty() && parameterSize.isEmpty() && quantizationLevel.isEmpty(); }
 };
@@ -158,8 +166,9 @@ public:
     // there if it couldn't be determined (older Ollama versions, or a model
     // whose metadata doesn't expose it) — callers should treat 0 as "unknown"
     // rather than "zero-size context". Also emits modelMetadataFetched() off
-    // the very same response's "details" object, rather than a second
-    // /api/show round trip for the family/parameter-size/quantization
+    // the very same response's "details" object (plus its top-level
+    // "capabilities" array, e.g. "vision"/"tools"/"thinking" — see
+    // ModelMetadata), rather than a second /api/show round trip for what the
     // caller wants alongside it.
     void fetchModelContextLength(const QString &model);
 

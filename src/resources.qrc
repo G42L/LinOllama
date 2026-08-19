@@ -18,5 +18,7 @@
         <file>icons/copy.svg</file>
         <file>icons/source-code.svg</file>
         <file>icons/webpack.svg</file>
+        <file>icons/eye.svg</file>
+        <file>icons/wrench.svg</file>
     </qresource>
 </RCC>

@@ -4,6 +4,9 @@
 #include <QVector>
 #include <QPair>
 #include <QString>
+#include <QHash>
+#include <QSet>
+#include <QStringList>
 #include "ThemeManager.h"
 #include "OllamaClient.h"
 #include "ConversationStore.h"
@@ -161,6 +164,13 @@ private slots:
     // elsewhere in the app current also keeps this list current, so there's
     // no separate fetch call needed here.
     void onInstalledModelsListed(const QStringList &modelNames);
+
+    // Reacts to OllamaClient::modelMetadataFetched, fired off the
+    // per-model /api/show request rebuildInstalledModelsList() kicks off
+    // (see m_modelCapabilities below) — refreshes just the capability
+    // icons once a model's result comes in, rather than waiting for the
+    // next 3s modelsListed() poll to pick up the cache.
+    void onModelMetadataFetched(const QString &model, const ModelMetadata &metadata);
 
     // Data tab: storage locations + backup/restore — see ConversationStore::
     // exportAll()/importAll() for the conversations bundle format, and
@@ -345,6 +355,17 @@ private:
     QLabel *m_installedModelsStatusLabel = nullptr;
     void rebuildInstalledModelsList(const QStringList &modelNames);
     void clearInstalledModelsList();
+    QWidget *buildCapabilityIconsWidget(const QStringList &capabilities, bool dark);
+
+    // Capability icons (thinking/vision/tools — see buildCapabilityIconsWidget())
+    // shown after each installed model's name. Keyed by model name.
+    // m_modelCapabilities caches OllamaClient::modelMetadataFetched()'s
+    // result so the 3s modelsListed() poll doesn't re-fetch it every time
+    // it rebuilds the list; m_capabilitiesRequestedFor tracks which models
+    // already have an /api/show request in flight or answered, so each
+    // model is only ever queried once per session.
+    QHash<QString, QStringList> m_modelCapabilities;
+    QSet<QString> m_capabilitiesRequestedFor;
 
     // Ollama tab's "Generation parameters" group — see GenerationOptions
     // (OllamaClient.h) for how these map onto the actual /api/chat request,

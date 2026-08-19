@@ -278,6 +278,8 @@ void OllamaClient::fetchModelContextLength(const QString &model)
         metadata.family = details.value("family").toString();
         metadata.parameterSize = details.value("parameter_size").toString();
         metadata.quantizationLevel = details.value("quantization_level").toString();
+        for (const QJsonValue &v : obj.value("capabilities").toArray())
+            metadata.capabilities.append(v.toString());
         emit modelMetadataFetched(model, metadata);
 
         // model_info keys are architecture-prefixed, e.g. "llama.context_length"
