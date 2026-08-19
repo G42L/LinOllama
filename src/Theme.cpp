@@ -372,6 +372,18 @@ QProgressBar#contextUsageProgress {
     border-radius: 3px;
 }
 
+/* --- In-chat find bar (Ctrl+F) ------------------------------------------ */
+#findBar {
+    background-color: {{bg}};
+    border-bottom: 1px solid {{hairline}};
+}
+
+#findCountLabel {
+    background-color: transparent;
+    color: {{secondaryText}};
+    font-size: 11px;
+}
+
 QProgressBar#contextUsageProgress::chunk {
     background-color: {{accent}};
     border-radius: 3px;

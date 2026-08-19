@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QScrollArea>
 #include <QProgressBar>
+#include <QLineEdit>
 #include <QHash>
 #include <QVector>
 #include <QStringList>
@@ -32,6 +33,7 @@ class ThinkingSectionWidget;
 class ToolCallSectionWidget;
 class ThemeManager;
 class QTimer;
+class QShortcut;
 
 // Displays the active conversation and handles sending messages + streaming
 // the assistant's reply in. Does not own OllamaClient/ConversationStore —
@@ -184,6 +186,16 @@ private slots:
     void onStopClicked();
     void onAttachClicked();
     void onJumpToClicked();
+    // Ctrl+F — see m_findShortcut. Shows m_findBar if hidden, or just
+    // refocuses/reselects m_findEdit if it's already open (standard "find
+    // bar" behavior: never toggles closed, only Escape/the close button do).
+    void onFindShortcutActivated();
+    // Re-scans every message bubble for `text` (see recomputeFindMatches())
+    // on every keystroke — no separate "Search" button/Enter requirement.
+    void onFindTextChanged(const QString &text);
+    void onFindNextClicked();
+    void onFindPreviousClicked();
+    void onFindBarCloseClicked();
     void onWebSearchToggled(bool enabled);
     void onCalculatorToggled(bool enabled);
     void onDateTimeToolToggled(bool enabled);
@@ -321,6 +333,48 @@ private:
     // swap between the rendered/live view and the original raw reply text.
     // No html/map block present is just the normal-render case.
     void renderAssistantContent(AutoHeightTextBrowser *browser, QVBoxLayout *bubbleLayout, const QString &content);
+
+    // --- In-chat find (Ctrl+F) --------------------------------------------
+    // One match: which bubble's browser it's in, and the [position, position
+    // + length) range within that browser's own QTextDocument — recomputed
+    // wholesale on every query change (recomputeFindMatches()), not patched
+    // incrementally, since re-scanning every bubble's document is cheap at
+    // realistic conversation sizes and far simpler than tracking edits.
+    struct FindMatch
+    {
+        AutoHeightTextBrowser *browser = nullptr;
+        int position = 0;
+        int length = 0;
+    };
+    // Re-scans every bubble in m_allMessageBrowsers (top to bottom, so match
+    // order matches reading order) for m_findEdit's current text via
+    // QTextDocument::find(), rebuilding m_findMatches from scratch. Empty
+    // query clears everything. Selects match 0 and scrolls to it if there's
+    // at least one result; otherwise leaves m_currentFindMatchIndex at -1 and
+    // just clears highlighting. Called from onFindTextChanged() and whenever
+    // the rendered conversation changes while the find bar is open (see
+    // renderConversation()).
+    void recomputeFindMatches();
+    // Applies m_findMatches as QTextEdit::ExtraSelections on each bubble
+    // that has at least one — the current match (m_currentFindMatchIndex)
+    // gets a stronger highlight than the rest, same visual convention as a
+    // browser's own Ctrl+F. Bubbles with no matches get an empty selection
+    // list (clearing any highlight left over from a previous, broader
+    // query) rather than being skipped.
+    void applyFindHighlights();
+    // Moves m_currentFindMatchIndex to `index` (wrapping via onFindNextClicked/
+    // onFindPreviousClicked, or set directly to 0 by recomputeFindMatches()),
+    // re-applies highlights, updates m_findCountLabel, and scrolls
+    // m_scrollArea so that match's position is visible — via
+    // AutoHeightTextBrowser::cursorRect() on a throwaway cursor rather than
+    // actually calling setTextCursor() on the (read-only) browser, so this
+    // never produces a competing native text selection alongside the
+    // ExtraSelection highlight.
+    void goToFindMatch(int index);
+    // "3 / 12", "No results" (non-empty query, zero matches), or empty text
+    // (empty query) — reflects m_findMatches.size()/m_currentFindMatchIndex.
+    void updateFindCountLabel();
+
     void setInputEnabled(bool enabled);
     void scrollToBottom();
     void ensureContextLengthKnown(const QString &model);
@@ -516,6 +570,25 @@ private:
     QScrollArea *m_scrollArea = nullptr;
     QWidget *m_messagesContainer = nullptr;
     QVBoxLayout *m_messagesLayout = nullptr;
+
+    // --- In-chat find (Ctrl+F) --------------------------------------------
+    // A slim bar above m_scrollArea, hidden until Ctrl+F — see
+    // onFindShortcutActivated()/onFindBarCloseClicked().
+    QWidget *m_findBar = nullptr;
+    QLineEdit *m_findEdit = nullptr;
+    QLabel *m_findCountLabel = nullptr;
+    QToolButton *m_findPrevButton = nullptr;
+    QToolButton *m_findNextButton = nullptr;
+    QToolButton *m_findCloseButton = nullptr;
+    QShortcut *m_findShortcut = nullptr;
+    // Every message bubble's browser, in the same top-to-bottom order they
+    // appear in m_messagesLayout — rebuilt alongside m_userMessageMarkers in
+    // clearMessages()/appendMessageBubble(), and what recomputeFindMatches()
+    // scans. Unlike m_userMessageMarkers, covers assistant bubbles too (a
+    // find has to search everything, not just the user's own prompts).
+    QVector<AutoHeightTextBrowser *> m_allMessageBrowsers;
+    QVector<FindMatch> m_findMatches;
+    int m_currentFindMatchIndex = -1; // -1 means "no matches" (or find bar not open/empty query)
 
     // Shown instead of m_scrollArea when there's no active conversation: a
     // centered title/subtitle with the *same* m_inputBar widget docked into

@@ -30,6 +30,10 @@
 #include <QSignalBlocker>
 #include <QToolTip>
 #include <QCursor>
+#include <QShortcut>
+#include <QTextEdit>
+#include <QTextDocument>
+#include <QKeyEvent>
 
 ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, ThemeManager *themeManager,
                        WhisperManager *whisperManager, QWidget *parent)
@@ -61,6 +65,64 @@ ChatWidget::ChatWidget(OllamaClient *ollamaClient, ConversationStore *store, The
     m_messagesLayout->addStretch(1); // keeps bubbles pinned to the top until there are enough to scroll
 
     m_scrollArea->setWidget(m_messagesContainer);
+
+    // --- In-chat find bar (Ctrl+F) -----------------------------------------
+    // Hidden until toggled — see onFindShortcutActivated(). Sits directly
+    // above the message list rather than floating over it, so it never
+    // covers whatever it just scrolled to.
+    m_findBar = new QWidget;
+    m_findBar->setObjectName("findBar");
+    m_findBar->setVisible(false);
+    auto *findBarLayout = new QHBoxLayout(m_findBar);
+    findBarLayout->setContentsMargins(12, 6, 12, 6);
+    findBarLayout->setSpacing(6);
+
+    m_findEdit = new QLineEdit;
+    m_findEdit->setPlaceholderText("Find in conversation…");
+    // Catches Escape (close) and Enter/Shift+Enter (next/previous match) —
+    // see eventFilter(). textChanged already covers live-as-you-type search.
+    m_findEdit->installEventFilter(this);
+    connect(m_findEdit, &QLineEdit::textChanged, this, &ChatWidget::onFindTextChanged);
+    findBarLayout->addWidget(m_findEdit, /*stretch=*/1);
+
+    m_findCountLabel = new QLabel;
+    m_findCountLabel->setObjectName("findCountLabel");
+    m_findCountLabel->setMinimumWidth(64); // stops the bar jittering width as the count text changes
+    findBarLayout->addWidget(m_findCountLabel);
+
+    m_findPrevButton = new QToolButton;
+    m_findPrevButton->setText(QString::fromUtf8("\xE2\x86\x91")); // "↑" — previous match
+    m_findPrevButton->setToolTip("Previous match (Shift+Enter)");
+    m_findPrevButton->setAutoRaise(true);
+    m_findPrevButton->setCursor(Qt::PointingHandCursor);
+    connect(m_findPrevButton, &QToolButton::clicked, this, &ChatWidget::onFindPreviousClicked);
+    findBarLayout->addWidget(m_findPrevButton);
+
+    m_findNextButton = new QToolButton;
+    m_findNextButton->setText(QString::fromUtf8("\xE2\x86\x93")); // "↓" — next match
+    m_findNextButton->setToolTip("Next match (Enter)");
+    m_findNextButton->setAutoRaise(true);
+    m_findNextButton->setCursor(Qt::PointingHandCursor);
+    connect(m_findNextButton, &QToolButton::clicked, this, &ChatWidget::onFindNextClicked);
+    findBarLayout->addWidget(m_findNextButton);
+
+    m_findCloseButton = new QToolButton;
+    m_findCloseButton->setText(QString::fromUtf8("\xC3\x97")); // "×"
+    m_findCloseButton->setToolTip("Close (Esc)");
+    m_findCloseButton->setAutoRaise(true);
+    m_findCloseButton->setCursor(Qt::PointingHandCursor);
+    connect(m_findCloseButton, &QToolButton::clicked, this, &ChatWidget::onFindBarCloseClicked);
+    findBarLayout->addWidget(m_findCloseButton);
+
+    layout->addWidget(m_findBar);
+
+    // WidgetWithChildrenShortcut so Ctrl+F fires no matter which child
+    // widget has focus (the message browsers, the input box, ...) as long
+    // as focus is somewhere inside this ChatWidget.
+    m_findShortcut = new QShortcut(QKeySequence::Find, this);
+    m_findShortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(m_findShortcut, &QShortcut::activated, this, &ChatWidget::onFindShortcutActivated);
+
     layout->addWidget(m_scrollArea, /*stretch=*/1);
 
     // --- Empty state: centered intro + the same input bar docked in -------
@@ -641,10 +703,16 @@ void ChatWidget::clearMessages()
         }
         delete item;
     }
-    // The rows just queued for deletion are what m_userMessageMarkers points
-    // at — clear it now (synchronously, before any stale pointer could be
-    // used) rather than waiting for the deferred deleteLater() to run.
+    // The rows just queued for deletion are what m_userMessageMarkers and
+    // m_allMessageBrowsers point at — clear both now (synchronously, before
+    // any stale pointer could be used) rather than waiting for the deferred
+    // deleteLater() to run. m_findMatches holds browser pointers too, so it
+    // has to go alongside them; renderConversation() rebuilds it (if the
+    // find bar is open) once the new bubbles exist.
     m_userMessageMarkers.clear();
+    m_allMessageBrowsers.clear();
+    m_findMatches.clear();
+    m_currentFindMatchIndex = -1;
 
     // renderConversation() rebuilds the whole message list immediately
     // after calling this — deleteLater() above only *schedules* destruction,
@@ -784,6 +852,14 @@ void ChatWidget::renderConversation()
     // here instead, as a new trailing row.
     if (hasLiveStream && !lastMessageIsLiveAssistant)
         reconnectStreamingBubble();
+
+    // clearMessages() (above) already wiped m_findMatches, since it held
+    // pointers into the just-destroyed bubbles — re-scan the freshly built
+    // ones now, but only while the find bar is actually open (an empty
+    // query is a fast no-op inside recomputeFindMatches() anyway, but
+    // skipping the call outright when the bar's hidden avoids even that).
+    if (m_findBar->isVisible())
+        recomputeFindMatches();
 }
 
 QString ChatWidget::livePreviewText(const QString &buffer)
@@ -983,6 +1059,8 @@ AutoHeightTextBrowser *ChatWidget::appendMessageBubble(const QString &role, cons
                 editMessage(messageIndex, newText);
         });
     }
+
+    m_allMessageBrowsers.append(browser);
 
     if (isUser) {
         UserMessageMarker marker;
@@ -2016,6 +2094,131 @@ void ChatWidget::onJumpToClicked()
     menu.exec(m_jumpToButton->mapToGlobal(QPoint(0, m_jumpToButton->height())));
 }
 
+void ChatWidget::onFindShortcutActivated()
+{
+    if (m_activeConversationId.isEmpty())
+        return; // nothing to search — no conversation open
+
+    m_findBar->setVisible(true);
+    m_findEdit->setFocus();
+    m_findEdit->selectAll();
+    // Bubbles get rebuilt wholesale on things like a theme/font-scale change
+    // (see renderConversation()), which already re-scans while the bar's
+    // visible — but if the bar was hidden at the time, that skipped the
+    // rescan, so a stale, now-empty m_findMatches from before could be
+    // sitting around with a still-populated query. Re-running here on
+    // reopen covers that gap.
+    if (!m_findEdit->text().isEmpty())
+        recomputeFindMatches();
+}
+
+void ChatWidget::onFindTextChanged(const QString &)
+{
+    recomputeFindMatches();
+}
+
+void ChatWidget::onFindNextClicked()
+{
+    if (m_findMatches.isEmpty())
+        return;
+    goToFindMatch((m_currentFindMatchIndex + 1) % m_findMatches.size());
+}
+
+void ChatWidget::onFindPreviousClicked()
+{
+    if (m_findMatches.isEmpty())
+        return;
+    goToFindMatch((m_currentFindMatchIndex - 1 + m_findMatches.size()) % m_findMatches.size());
+}
+
+void ChatWidget::onFindBarCloseClicked()
+{
+    m_findBar->setVisible(false);
+    m_findEdit->clear(); // triggers onFindTextChanged() -> recomputeFindMatches(), clearing matches/highlights
+    m_inputEdit->setFocus();
+}
+
+void ChatWidget::recomputeFindMatches()
+{
+    m_findMatches.clear();
+
+    const QString query = m_findEdit->text();
+    if (!query.isEmpty()) {
+        for (AutoHeightTextBrowser *browser : m_allMessageBrowsers) {
+            QTextCursor cursor(browser->document());
+            for (;;) {
+                cursor = browser->document()->find(query, cursor);
+                if (cursor.isNull())
+                    break;
+                m_findMatches.append(FindMatch{browser, cursor.selectionStart(),
+                                                cursor.selectionEnd() - cursor.selectionStart()});
+            }
+        }
+    }
+
+    goToFindMatch(m_findMatches.isEmpty() ? -1 : 0);
+}
+
+void ChatWidget::applyFindHighlights()
+{
+    // Pre-seeding every known browser with an empty list means one that had
+    // a highlight from a previous, broader query but has none under the
+    // current one still gets that stale highlight cleared, not left behind.
+    QHash<AutoHeightTextBrowser *, QList<QTextEdit::ExtraSelection>> selectionsByBrowser;
+    for (AutoHeightTextBrowser *browser : m_allMessageBrowsers)
+        selectionsByBrowser[browser] = {};
+
+    static const QColor kMatchColor(255, 224, 102, 130);      // soft yellow, semi-transparent
+    static const QColor kCurrentMatchColor(255, 165, 0, 210); // stronger orange for the active match
+
+    for (int i = 0; i < m_findMatches.size(); ++i) {
+        const FindMatch &match = m_findMatches[i];
+        QTextCursor cursor(match.browser->document());
+        cursor.setPosition(match.position);
+        cursor.setPosition(match.position + match.length, QTextCursor::KeepAnchor);
+
+        QTextEdit::ExtraSelection selection;
+        selection.cursor = cursor;
+        selection.format.setBackground(i == m_currentFindMatchIndex ? kCurrentMatchColor : kMatchColor);
+        selectionsByBrowser[match.browser].append(selection);
+    }
+
+    for (auto it = selectionsByBrowser.constBegin(); it != selectionsByBrowser.constEnd(); ++it)
+        it.key()->setExtraSelections(it.value());
+}
+
+void ChatWidget::goToFindMatch(int index)
+{
+    m_currentFindMatchIndex = (index >= 0 && index < m_findMatches.size()) ? index : -1;
+    applyFindHighlights();
+    updateFindCountLabel();
+
+    if (m_currentFindMatchIndex < 0)
+        return;
+
+    // A throwaway cursor just to ask the browser where that range renders —
+    // deliberately not assigned via setTextCursor() on the (read-only)
+    // browser itself, which would show Qt's own native selection highlight
+    // competing with the ExtraSelection color set above.
+    const FindMatch &match = m_findMatches[m_currentFindMatchIndex];
+    QTextCursor cursor(match.browser->document());
+    cursor.setPosition(match.position);
+    cursor.setPosition(match.position + match.length, QTextCursor::KeepAnchor);
+    const QRect rect = match.browser->cursorRect(cursor);
+    const QPoint posInContainer = match.browser->mapTo(m_messagesContainer, rect.center());
+    m_scrollArea->ensureVisible(posInContainer.x(), posInContainer.y(), 10, 80);
+}
+
+void ChatWidget::updateFindCountLabel()
+{
+    if (m_findEdit->text().isEmpty())
+        m_findCountLabel->clear();
+    else if (m_findMatches.isEmpty())
+        m_findCountLabel->setText("No results");
+    else
+        m_findCountLabel->setText(QString("%1/%2").arg(m_currentFindMatchIndex + 1).arg(m_findMatches.size()));
+}
+
 void ChatWidget::onWebSearchToggled(bool enabled)
 {
     // Enabling with no Brave API key configured would just mean every
@@ -2407,6 +2610,19 @@ bool ChatWidget::eventFilter(QObject *watched, QEvent *event)
         m_inputCard->style()->polish(m_inputCard);
     } else if (watched == m_emptyStatePanel && event->type() == QEvent::Resize) {
         updateEmptyStateInputWidth();
+    } else if (watched == m_findEdit && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if (keyEvent->key() == Qt::Key_Escape) {
+            onFindBarCloseClicked();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter) {
+            if (keyEvent->modifiers() & Qt::ShiftModifier)
+                onFindPreviousClicked();
+            else
+                onFindNextClicked();
+            return true;
+        }
     }
     return QWidget::eventFilter(watched, event);
 }
